@@ -4,6 +4,30 @@
 let _onAuthError: (() => void) | null = null
 export function setOnAuthError(fn: (() => void) | null) { _onAuthError = fn }
 
+// ---------------------------------------------------------------------------
+// Request timeout helper
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TIMEOUT_MS = 30_000  // 30 seconds
+const AGENT_TIMEOUT_MS = 180_000   // 3 minutes for agent tasks
+
+function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchInit } = init ?? {}
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), timeoutMs)
+
+  return fetch(input, { ...fetchInit, signal: controller.signal })
+    .then(res => { clearTimeout(id); return res })
+    .catch(err => {
+      clearTimeout(id)
+      if (err.name === 'AbortError') throw new Error(`Request timed out after ${timeoutMs / 1000}s`)
+      throw err
+    })
+}
+
 export interface Settings {
   apiKey: string
   baseUrl: string
@@ -143,7 +167,7 @@ export async function apiLogin(
   email: string,
   password: string,
 ): Promise<{ access_token: string; token_type: string; tenant_slug: string }> {
-  const res = await fetch(`${baseUrl}/api/v1/auth/login`, {
+  const res = await fetchWithTimeout(`${baseUrl}/api/v1/auth/login`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -163,7 +187,7 @@ export async function apiRegister(
   password: string,
   name: string,
 ): Promise<{ user_id: string; email: string; name: string; message: string }> {
-  const res = await fetch(`${baseUrl}/api/v1/auth/register`, {
+  const res = await fetchWithTimeout(`${baseUrl}/api/v1/auth/register`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -186,7 +210,7 @@ export async function sendChat(
   auth: AuthHeaders,
   useKnowledge: boolean = false,
 ): Promise<ChatResponse> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/chat/`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/`, {
     method: 'POST',
     headers: authHeaders(auth),
     body: JSON.stringify({
@@ -241,7 +265,7 @@ export async function* streamChat(
 }
 
 export async function listSessions(settings: Settings, auth: AuthHeaders): Promise<SessionSummary[]> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/chat/sessions`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/sessions`, {
     headers: authHeadersNoBody(auth),
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
@@ -250,7 +274,7 @@ export async function listSessions(settings: Settings, auth: AuthHeaders): Promi
 }
 
 export async function getHistory(sessionId: string, settings: Settings, auth: AuthHeaders): Promise<SessionHistory> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/chat/${sessionId}/history`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/${sessionId}/history`, {
     headers: authHeadersNoBody(auth),
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
@@ -258,14 +282,14 @@ export async function getHistory(sessionId: string, settings: Settings, auth: Au
 }
 
 export async function deleteSession(sessionId: string, settings: Settings, auth: AuthHeaders): Promise<void> {
-  check401(await fetch(`${settings.baseUrl}/api/v1/chat/${sessionId}`, {
+  check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/${sessionId}`, {
     method: 'DELETE',
     headers: authHeadersNoBody(auth),
   }))
 }
 
 export async function archiveSession(sessionId: string, settings: Settings, auth: AuthHeaders): Promise<ArchiveResponse> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/chat/${sessionId}/archive`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/${sessionId}/archive`, {
     method: 'POST',
     headers: authHeadersNoBody(auth),
   }))
@@ -276,7 +300,7 @@ export async function archiveSession(sessionId: string, settings: Settings, auth
 // ── RAG ───────────────────────────────────────────────────────────────────
 
 export async function ragQuery(query: string, k: number, settings: Settings, auth: AuthHeaders): Promise<RAGQueryResponse> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/rag/query`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/rag/query`, {
     method: 'POST',
     headers: authHeaders(auth),
     body: JSON.stringify({ query, k }),
@@ -288,17 +312,18 @@ export async function ragQuery(query: string, k: number, settings: Settings, aut
 export async function ingestFile(file: File, settings: Settings, auth: AuthHeaders): Promise<IngestResponse> {
   const form = new FormData()
   form.append('file', file)
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/rag/ingest`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/rag/ingest`, {
     method: 'POST',
     headers: authHeadersNoBody(auth),
     body: form,
+    timeoutMs: 120_000,  // file uploads may take longer
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
   return res.json()
 }
 
 export async function listDocuments(settings: Settings, auth: AuthHeaders): Promise<DocumentInfo[]> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/rag/documents`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/rag/documents`, {
     headers: authHeadersNoBody(auth),
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
@@ -307,7 +332,7 @@ export async function listDocuments(settings: Settings, auth: AuthHeaders): Prom
 }
 
 export async function deleteDocument(documentId: string, settings: Settings, auth: AuthHeaders): Promise<void> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/rag/documents/${documentId}`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/rag/documents/${documentId}`, {
     method: 'DELETE',
     headers: authHeadersNoBody(auth),
   }))
@@ -317,10 +342,11 @@ export async function deleteDocument(documentId: string, settings: Settings, aut
 // ── Agent ─────────────────────────────────────────────────────────────────
 
 export async function runAgent(task: string, settings: Settings, auth: AuthHeaders): Promise<AgentRunResponse> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/agent/run`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/agent/run`, {
     method: 'POST',
     headers: authHeaders(auth),
     body: JSON.stringify({ task }),
+    timeoutMs: AGENT_TIMEOUT_MS,
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
   return res.json()
@@ -350,7 +376,7 @@ export async function createApiToken(
   settings: Settings,
   auth: AuthHeaders,
 ): Promise<CreateTokenResponse> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/tokens/`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/tokens/`, {
     method: 'POST',
     headers: authHeaders(auth),
     body: JSON.stringify({ name }),
@@ -363,7 +389,7 @@ export async function listApiTokens(
   settings: Settings,
   auth: AuthHeaders,
 ): Promise<ApiTokenInfo[]> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/tokens/`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/tokens/`, {
     headers: authHeadersNoBody(auth),
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
@@ -376,7 +402,7 @@ export async function revokeApiToken(
   settings: Settings,
   auth: AuthHeaders,
 ): Promise<void> {
-  const res = check401(await fetch(`${settings.baseUrl}/api/v1/tokens/${tokenId}`, {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/tokens/${tokenId}`, {
     method: 'DELETE',
     headers: authHeadersNoBody(auth),
   }))

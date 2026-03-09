@@ -1,0 +1,65 @@
+[project]
+name = "bob"
+version = "1.0.0"
+description = "AI agent platform with multi-tenant auth, RAG, and agentic tool use"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit (security)
+    "T20",  # flake8-print
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "S101",   # allow assert in tests
+    "S104",   # allow binding to 0.0.0.0
+    "B008",   # allow function calls in defaults (FastAPI Depends)
+    "UP007",  # allow X | Y union syntax (keep Optional for clarity)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S106"]
+"alembic/*" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "core", "pipelines"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+log_cli = true
+log_cli_level = "WARNING"
+addopts = "-v --tb=short"
+markers = [
+    "unit: Unit tests (fast, no external deps)",
+    "integration: Integration tests (may need DB/services)",
+    "slow: Slow tests (>5s)",
+]

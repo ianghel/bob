@@ -2,11 +2,10 @@
 
 import json
 import logging
-import os
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -36,7 +35,7 @@ _memory = ConversationMemory()
 class ChatRequest(BaseModel):
     """Request body for the chat endpoint."""
 
-    message: str = Field(..., description="User message", min_length=1)
+    message: str = Field(..., description="User message", min_length=1, max_length=32_000)
     session_id: Optional[str] = Field(
         None, description="Session ID for conversation continuity; generated if omitted"
     )
@@ -118,9 +117,9 @@ async def chat(
     )
     session_id = session.id
 
-    system_prompt = request.system_prompt or os.getenv(
-        "SYSTEM_PROMPT", "You are a helpful AI assistant."
-    )
+    from core.config import get_settings
+    _settings = get_settings()
+    system_prompt = request.system_prompt or _settings.system_prompt
 
     # Optionally augment with RAG context
     knowledge_sources: list[str] | None = None
@@ -253,9 +252,12 @@ async def list_sessions(
     db: DBSessionDep,
     user: CurrentUserDep,
     tenant: CurrentTenantDep,
+    limit: int = Query(20, ge=1, le=100, description="Max sessions to return"),
+    offset: int = Query(0, ge=0, description="Number of sessions to skip"),
 ) -> SessionListResponse:
-    """List all conversation sessions for the current user."""
+    """List conversation sessions for the current user (paginated)."""
     conversations = await _memory.list_sessions(db=db, tenant_id=tenant.id, user_id=user.id)
+    page = conversations[offset : offset + limit]
     return SessionListResponse(
         sessions=[
             SessionSummary(
@@ -264,7 +266,7 @@ async def list_sessions(
                 created_at=c.created_at.isoformat() if c.created_at else "",
                 updated_at=c.updated_at.isoformat() if c.updated_at else "",
             )
-            for c in conversations
+            for c in page
         ],
         total=len(conversations),
     )

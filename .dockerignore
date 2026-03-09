@@ -1,0 +1,42 @@
+# Version control
+.git/
+.github/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment & Secrets
+.env
+.env.*
+deploy.env
+
+# Data (local vector store)
+data/
+
+# Node (rebuilt in Docker)
+node_modules/
+bob-ui/node_modules/
+bob-ui/dist/
+
+# IDE
+.idea/
+.vscode/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Legacy
+scripts/
+cloudformation/

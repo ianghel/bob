@@ -30,9 +30,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class RegisterRequest(BaseModel):
-    email: str = Field(..., min_length=3)
-    password: str = Field(..., min_length=8)
-    name: str = Field(..., min_length=1)
+    email: str = Field(..., min_length=5, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(..., min_length=8, max_length=128)
+    name: str = Field(..., min_length=1, max_length=255)
 
 
 class RegisterResponse(BaseModel):
@@ -43,8 +43,8 @@ class RegisterResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., max_length=255)
+    password: str = Field(..., max_length=128)
 
 
 class LoginResponse(BaseModel):
@@ -54,7 +54,7 @@ class LoginResponse(BaseModel):
 
 
 class ForgotPasswordRequest(BaseModel):
-    email: str
+    email: str = Field(..., max_length=255)
 
 
 class ResetPasswordRequest(BaseModel):

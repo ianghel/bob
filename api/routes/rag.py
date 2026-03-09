@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, status
 from pydantic import BaseModel, Field
 
 from api.dependencies import (
@@ -32,7 +32,7 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 class RAGQueryRequest(BaseModel):
     """Request body for querying the knowledge base."""
 
-    query: str = Field(..., description="The question to answer", min_length=1)
+    query: str = Field(..., description="The question to answer", min_length=1, max_length=8_000)
     k: int = Field(4, ge=1, le=20, description="Number of context chunks to retrieve")
     session_id: Optional[str] = Field(
         None, description="Optional session ID for conversational RAG"
@@ -208,15 +208,17 @@ async def list_documents(
     retriever: RetrieverDep,
     tenant: CurrentTenantDep,
     user: CurrentUserDep,
+    limit: int = Query(50, ge=1, le=200, description="Max documents to return"),
+    offset: int = Query(0, ge=0, description="Number of documents to skip"),
 ) -> DocumentListResponse:
-    """List all documents in the current tenant's knowledge base."""
+    """List documents in the current tenant's knowledge base (paginated)."""
     try:
-        documents = retriever.list_documents(tenant_id=tenant.id)
+        all_documents = retriever.list_documents(tenant_id=tenant.id)
     except Exception as e:
         logger.error("Failed to list documents: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list documents: {e}",
         )
-
-    return DocumentListResponse(documents=documents, total=len(documents))
+    page = all_documents[offset : offset + limit]
+    return DocumentListResponse(documents=page, total=len(all_documents))

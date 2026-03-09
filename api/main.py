@@ -1,7 +1,6 @@
 """FastAPI application entry point."""
 
 import logging
-import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -12,21 +11,33 @@ load_dotenv()
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from api.routes import agent, auth, chat, rag, tenants, tokens
+from core.config import get_settings
+
+settings = get_settings()
 
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    level=settings.log_level.upper(),
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+
+limiter = Limiter(key_func=get_remote_address, default_limits=[settings.rate_limit])
 
 # ---------------------------------------------------------------------------
 # Application lifespan
@@ -39,7 +50,7 @@ async def lifespan(app: FastAPI):
     from core.database.engine import engine
     from core.database.models import Base
 
-    logger.info("Starting bob (provider=%s)", os.getenv("LLM_PROVIDER", "local"))
+    logger.info("Starting bob (provider=%s)", settings.llm_provider)
 
     # Create all tables if they don't exist
     async with engine.begin() as conn:
@@ -69,18 +80,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Attach rate limiter state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # ---------------------------------------------------------------------------
-# CORS middleware
+# Middleware (order matters — last added = outermost)
 # ---------------------------------------------------------------------------
 
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080").split(",")
+# GZip compression for responses > 500 bytes
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Tenant-ID"],
 )
 
 
@@ -140,11 +157,28 @@ app.include_router(tokens.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["meta"], summary="Health check")
 async def health_check() -> dict:
-    """Return application health status."""
+    """Return application health status with dependency checks."""
+    import sqlalchemy
+
+    from core.database.engine import engine
+
+    checks: dict[str, str] = {}
+
+    # Database connectivity
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(sqlalchemy.text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+
+    overall = "healthy" if all(v == "ok" for v in checks.values()) else "degraded"
+
     return {
-        "status": "healthy",
-        "provider": os.getenv("LLM_PROVIDER", "local"),
+        "status": overall,
+        "provider": settings.llm_provider,
         "version": "1.0.0",
+        "checks": checks,
     }
 
 

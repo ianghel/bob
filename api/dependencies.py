@@ -1,7 +1,6 @@
 """FastAPI dependency injection providers."""
 
 import logging
-import os
 from typing import Annotated, Optional
 
 import jwt
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.agent.orchestrator import AgentOrchestrator
 from core.auth.api_tokens import validate_api_token
+from core.config import Settings, get_settings
 from core.database.engine import get_db
 from core.database.models import Tenant, User
 from core.auth.jwt import decode_token
@@ -120,10 +120,12 @@ CurrentTenantDep = Annotated[Tenant, Depends(get_current_tenant)]
 API_KEY_NAME = "X-API-Key"
 
 
-async def verify_api_key(x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None) -> str:
+async def verify_api_key(
+    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    settings: Settings = Depends(get_settings),
+) -> str:
     """Validate the X-API-Key header."""
-    expected_key = os.getenv("API_KEY", "dev-secret-key-change-in-prod")
-    if not x_api_key or x_api_key != expected_key:
+    if not x_api_key or x_api_key != settings.api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
@@ -149,23 +151,23 @@ def get_llm_provider() -> BaseLLMProvider:
     """Return the configured LLM provider (Bedrock or Local)."""
     global _llm_provider
     if _llm_provider is None:
-        provider = os.getenv("LLM_PROVIDER", "local").lower()
-        if provider == "bedrock":
-            region = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
-            _llm_provider = BedrockProvider(region=region)
-            logger.info("Using BedrockProvider (region=%s)", region)
+        settings = get_settings()
+        if settings.llm_provider == "bedrock":
+            _llm_provider = BedrockProvider(region=settings.aws_default_region)
+            logger.info("Using BedrockProvider (region=%s)", settings.aws_default_region)
         else:
-            base_url = os.getenv("LOCAL_MODEL_BASE_URL", "http://localhost:1234/v1")
-            model_name = os.getenv("LOCAL_MODEL_NAME", "your-model-name")
-            embed_model = os.getenv("LOCAL_MODEL_EMBED_NAME", "text-embedding-nomic-embed-text-v1.5")
-            api_key = os.getenv("LOCAL_MODEL_API_KEY", "not-needed")
             _llm_provider = LocalProvider(
-                base_url=base_url,
-                model_name=model_name,
-                api_key=api_key,
-                embed_model_name=embed_model,
+                base_url=settings.local_model_base_url,
+                model_name=settings.local_model_name,
+                api_key=settings.local_model_api_key,
+                embed_model_name=settings.local_model_embed_name,
             )
-            logger.info("Using LocalProvider (url=%s, model=%s, embed=%s)", base_url, model_name, embed_model)
+            logger.info(
+                "Using LocalProvider (url=%s, model=%s, embed=%s)",
+                settings.local_model_base_url,
+                settings.local_model_name,
+                settings.local_model_embed_name,
+            )
     return _llm_provider
 
 
@@ -173,20 +175,16 @@ def _build_embedding_function():
     """Build the LangChain embedding function based on LLM_PROVIDER setting."""
     from langchain_openai import OpenAIEmbeddings
 
-    provider = os.getenv("LLM_PROVIDER", "local").lower()
-    if provider == "bedrock":
-        region = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    settings = get_settings()
+    if settings.llm_provider == "bedrock":
         return BedrockEmbeddings(
             model_id="amazon.titan-embed-text-v2:0",
-            region_name=region,
+            region_name=settings.aws_default_region,
         )
-    base_url = os.getenv("LOCAL_MODEL_BASE_URL", "http://localhost:1234/v1")
-    embed_model = os.getenv("LOCAL_MODEL_EMBED_NAME", "text-embedding-nomic-embed-text-v1.5")
-    api_key = os.getenv("LOCAL_MODEL_API_KEY", "not-needed")
     return OpenAIEmbeddings(
-        model=embed_model,
-        openai_api_base=base_url,
-        openai_api_key=api_key,
+        model=settings.local_model_embed_name,
+        openai_api_base=settings.local_model_base_url,
+        openai_api_key=settings.local_model_api_key,
         default_headers={"User-Agent": "curl/7.88.1"},
         check_embedding_ctx_length=False,
     )
@@ -196,17 +194,14 @@ def get_retriever() -> ChromaRetriever:
     """Return the singleton ChromaRetriever instance."""
     global _retriever
     if _retriever is None:
-        chroma_host = os.getenv("CHROMA_HOST", "localhost")
-        chroma_port = int(os.getenv("CHROMA_PORT", "8001"))
-        use_http = os.getenv("CHROMA_USE_HTTP", "false").lower() == "true"
-
+        settings = get_settings()
         embedding_fn = _build_embedding_function()
         _retriever = ChromaRetriever(
             embedding_function=embedding_fn,
-            host=chroma_host,
-            port=chroma_port,
+            host=settings.chroma_host,
+            port=settings.chroma_port,
             persist_directory="./data/chroma_db",
-            use_http_client=use_http,
+            use_http_client=settings.chroma_use_http,
         )
     return _retriever
 
@@ -232,28 +227,23 @@ def get_ingestion_pipeline() -> DocumentIngestionPipeline:
 
 def _build_strands_model():
     """Build the Strands Model instance based on LLM_PROVIDER setting."""
-    provider = os.getenv("LLM_PROVIDER", "local").lower()
+    settings = get_settings()
 
-    if provider == "bedrock":
+    if settings.llm_provider == "bedrock":
         from strands.models.bedrock import BedrockModel
         return BedrockModel(
             model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
-            region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+            region_name=settings.aws_default_region,
         )
     else:
         from strands.models.openai import OpenAIModel
-
-        base_url = os.getenv("LOCAL_MODEL_BASE_URL", "http://localhost:1234/v1")
-        model_name = os.getenv("LOCAL_MODEL_NAME", "your-model-name")
-        api_key = os.getenv("LOCAL_MODEL_API_KEY", "not-needed")
-
         return OpenAIModel(
             client_args={
-                "base_url": base_url,
-                "api_key": api_key,
+                "base_url": settings.local_model_base_url,
+                "api_key": settings.local_model_api_key,
                 "default_headers": {"User-Agent": "curl/7.88.1"},
             },
-            model_id=model_name,
+            model_id=settings.local_model_name,
         )
 
 
@@ -261,13 +251,12 @@ def get_agent_orchestrator() -> AgentOrchestrator:
     """Return the singleton AgentOrchestrator instance."""
     global _agent_orchestrator
     if _agent_orchestrator is None:
-        system_prompt = os.getenv(
-            "SYSTEM_PROMPT", "You are a helpful AI assistant with access to tools."
-        )
+        settings = get_settings()
         _agent_orchestrator = AgentOrchestrator(
             strands_model=_build_strands_model(),
             rag_pipeline=get_rag_pipeline(),
-            system_prompt=system_prompt,
+            system_prompt=settings.system_prompt,
+            timeout_seconds=settings.agent_timeout_seconds,
         )
     return _agent_orchestrator
 

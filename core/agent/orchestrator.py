@@ -1,5 +1,6 @@
 """Strands agent orchestrator for multi-tool task execution."""
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -59,16 +60,19 @@ class AgentOrchestrator:
         strands_model: Model,
         rag_pipeline=None,
         system_prompt: str = "You are a helpful AI assistant with access to tools.",
+        timeout_seconds: int = 120,
     ) -> None:
         self._system_prompt = system_prompt
         self._strands_model = strands_model
         self._rag_pipeline = rag_pipeline
+        self._timeout_seconds = timeout_seconds
 
         self._base_tools = [calculator, get_current_time, summarize_text]
 
         logger.info(
-            "AgentOrchestrator initialized with %d base tools + rag_lookup",
+            "AgentOrchestrator initialized with %d base tools + rag_lookup (timeout=%ds)",
             len(self._base_tools),
+            self._timeout_seconds,
         )
 
     def _build_agent(self, tenant_id: str | None = None) -> Agent:
@@ -115,7 +119,10 @@ class AgentOrchestrator:
             agent = self._build_agent(tenant_id=tenant_id)
             logger.info("Agent run %s starting: %r", rid, task[:80])
 
-            response = agent(task)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(agent, task),
+                timeout=self._timeout_seconds,
+            )
 
             tool_calls_data = []
             if hasattr(response, "metrics") and response.metrics:
@@ -179,12 +186,15 @@ class AgentOrchestrator:
             return None
         return self._db_to_api(db_run)
 
-    async def list_runs(self, db: AsyncSession, tenant_id: str, limit: int = 20) -> list[AgentRun]:
-        """Return the most recent agent runs for a tenant."""
+    async def list_runs(
+        self, db: AsyncSession, tenant_id: str, limit: int = 20, offset: int = 0,
+    ) -> list[AgentRun]:
+        """Return the most recent agent runs for a tenant (paginated)."""
         stmt = (
             select(AgentRunModel)
             .where(AgentRunModel.tenant_id == tenant_id)
             .order_by(AgentRunModel.started_at.desc())
+            .offset(offset)
             .limit(limit)
         )
         result = await db.execute(stmt)

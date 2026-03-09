@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from api.dependencies import AgentDep, CurrentTenantDep, CurrentUserDep, DBSessionDep
@@ -26,6 +26,7 @@ class AgentRunRequest(BaseModel):
         ...,
         description="Natural language task for the agent to execute",
         min_length=1,
+        max_length=16_000,
     )
     run_id: Optional[str] = Field(
         None, description="Pre-assigned run ID; generated if omitted"
@@ -162,10 +163,11 @@ async def list_runs(
     db: DBSessionDep,
     user: CurrentUserDep,
     tenant: CurrentTenantDep,
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=100, description="Max runs to return"),
+    offset: int = Query(0, ge=0, description="Number of runs to skip"),
 ) -> AgentRunListResponse:
-    """List the most recent agent runs for the current tenant."""
-    runs = await orchestrator.list_runs(db=db, tenant_id=tenant.id, limit=limit)
+    """List the most recent agent runs for the current tenant (paginated)."""
+    runs = await orchestrator.list_runs(db=db, tenant_id=tenant.id, limit=limit, offset=offset)
     return AgentRunListResponse(
         runs=[_run_to_response(r) for r in runs],
         total=len(runs),

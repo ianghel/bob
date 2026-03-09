@@ -1,10 +1,16 @@
 # Bob
 
-Your AI agent. A production-ready chatbot demonstrating:
-- **Conversational AI** with persistent session memory
-- **RAG** (Retrieval-Augmented Generation) with ChromaDB
-- **Agentic tool use** via Strands Agents
-- **Provider abstraction**: Amazon Bedrock or any local OpenAI-compatible model (LM Studio, Ollama, etc.)
+An AI agent platform with multi-tenant authentication, conversational memory, RAG (Retrieval-Augmented Generation), and agentic tool use.
+
+## Features
+
+- **Conversational AI** with persistent session memory and SSE streaming
+- **RAG** pipeline with ChromaDB vector store for document-grounded answers
+- **Agentic tool use** via Strands Agents (calculator, time, RAG lookup, summarize)
+- **Multi-tenant auth** with JWT login, user registration, admin approval, and API tokens
+- **Provider abstraction**: Amazon Bedrock or any OpenAI-compatible server (LM Studio, Ollama, vLLM)
+- **React frontend** (Vite + TypeScript + Tailwind)
+- **AWS deployment** via CloudFormation + automated deploy script
 
 ---
 
@@ -12,11 +18,14 @@ Your AI agent. A production-ready chatbot demonstrating:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      FastAPI  (api/)                          │
-│                                                               │
-│  /api/v1/chat   ──► ConversationMemory ──► LLM Provider      │
-│  /api/v1/rag    ──► ChromaDB ──────────► LLM Provider        │
-│  /api/v1/agent  ──► Strands Agent ─────► LLM Provider        │
+│                     FastAPI  (api/)                           │
+│                                                              │
+│  /api/v1/auth    ──► JWT login / register / approval         │
+│  /api/v1/chat    ──► ConversationMemory ──► LLM Provider     │
+│  /api/v1/rag     ──► ChromaDB ──────────► LLM Provider       │
+│  /api/v1/agent   ──► Strands Agent ─────► LLM Provider       │
+│  /api/v1/tokens  ──► API token management                    │
+│  /api/v1/tenants ──► Tenant administration                   │
 └──────────────────────┬───────────────────────────────────────┘
                        │
          ┌─────────────▼──────────────┐
@@ -30,168 +39,222 @@ Your AI agent. A production-ready chatbot demonstrating:
 
 ---
 
-## Quick Start (Local — no Docker)
+## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 18+ (for the frontend)
+- MariaDB or MySQL (for user/tenant storage)
+- An OpenAI-compatible model server (LM Studio, Ollama, etc.) **or** AWS Bedrock access
 
 ### 1. Clone and enter the project
 
 ```bash
+git clone <repo-url>
 cd bob
 ```
 
-### 2. Create and activate a virtual environment
+### 2. Create a Python virtual environment
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Install dependencies
+### 3. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure environment
+### 4. Set up the database
+
+Create a MariaDB/MySQL database and user:
+
+```sql
+CREATE DATABASE bob CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'bob'@'localhost' IDENTIFIED BY 'your-password';
+GRANT ALL PRIVILEGES ON bob.* TO 'bob'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+Run migrations:
+
+```bash
+alembic upgrade head
+```
+
+### 5. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env — the defaults already point to the local LM Studio model
+# Edit .env with your values
 ```
 
-### 5. Start LM Studio
+Key settings in `.env`:
 
-- Open **LM Studio** → Load any model (e.g. Qwen3-30B, Llama 3, etc.)
-- Go to **Local Server** tab → Start server (default: `http://localhost:1234`)
-- Update `LOCAL_MODEL_BASE_URL` in `.env` if your port differs:
+| Variable | Description |
+|---|---|
+| `LLM_PROVIDER` | `local` (default) or `bedrock` |
+| `LOCAL_MODEL_BASE_URL` | Your model server URL (e.g. `http://localhost:1234/v1`) |
+| `LOCAL_MODEL_NAME` | Model name as shown by your server |
+| `LOCAL_MODEL_API_KEY` | API key for the model server (or `not-needed`) |
+| `API_KEY` | Static API key for backward-compatible endpoints |
+| `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` | Database connection |
+| `JWT_SECRET` | Secret for signing JWT tokens (change in production!) |
+| `MAIL_*` | SMTP settings for user approval emails |
 
-```env
-LOCAL_MODEL_BASE_URL=http://localhost:1234/v1
-LOCAL_MODEL_NAME=<exact-model-name-from-lm-studio>
+### 6. Start a model server
+
+**LM Studio:**
+- Load a model (e.g. Qwen, Llama, Mistral)
+- Go to **Local Server** tab and start the server
+- Set `LOCAL_MODEL_BASE_URL` and `LOCAL_MODEL_NAME` in `.env`
+
+**Ollama:**
+```bash
+ollama serve
+# LOCAL_MODEL_BASE_URL=http://localhost:11434/v1
 ```
 
-> **Tip:** The model name must match what LM Studio shows in its server info panel.
-
-### 6. Run the API
+### 7. Run the API
 
 ```bash
 uvicorn api.main:app --reload --port 8000
 ```
 
-Open [http://localhost:8000/docs](http://localhost:8000/docs) for the interactive Swagger UI.
+Open [http://localhost:8000/docs](http://localhost:8000/docs) for the Swagger UI.
+
+### 8. Run the frontend (optional)
+
+```bash
+cd bob-ui
+npm install
+npm run dev
+```
+
+Opens at [http://localhost:5173](http://localhost:5173).
 
 ---
 
 ## API Endpoints
 
-All endpoints require the `X-API-Key` header (default: `dev-secret-key-change-in-prod`).
+### Authentication
+
+```bash
+# Register a new user
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "secret", "name": "Alice"}'
+
+# Login (returns JWT token)
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "secret"}'
+
+# Get current user profile
+curl http://localhost:8000/api/v1/auth/me \
+  -H "Authorization: Bearer <token>"
+```
+
+New users require admin approval before they can access the API. The first registered user is auto-approved as admin.
 
 ### Chat
 
-#### Send a message
+All authenticated endpoints require `Authorization: Bearer <token>` header.
 
 ```bash
+# Send a message
 curl -X POST http://localhost:8000/api/v1/chat/ \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-secret-key-change-in-prod" \
+  -H "Authorization: Bearer <token>" \
   -d '{"message": "Hello! What can you do?"}'
-```
 
-#### Continue a conversation
-
-```bash
+# Continue a conversation
 curl -X POST http://localhost:8000/api/v1/chat/ \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-secret-key-change-in-prod" \
-  -d '{"message": "Tell me more.", "session_id": "<session_id_from_above>"}'
-```
+  -H "Authorization: Bearer <token>" \
+  -d '{"message": "Tell me more.", "session_id": "<session_id>"}'
 
-#### Stream a response (SSE)
-
-```bash
+# Stream a response (SSE)
 curl -X POST http://localhost:8000/api/v1/chat/ \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-secret-key-change-in-prod" \
+  -H "Authorization: Bearer <token>" \
   -d '{"message": "Write a short poem.", "stream": true}'
-```
 
-#### Get conversation history
+# List sessions
+curl http://localhost:8000/api/v1/chat/sessions \
+  -H "Authorization: Bearer <token>"
 
-```bash
+# Get conversation history
 curl http://localhost:8000/api/v1/chat/<session_id>/history \
-  -H "X-API-Key: dev-secret-key-change-in-prod"
+  -H "Authorization: Bearer <token>"
 ```
 
-#### Clear a session
+### RAG (Knowledge Base)
 
 ```bash
-curl -X DELETE http://localhost:8000/api/v1/chat/<session_id> \
-  -H "X-API-Key: dev-secret-key-change-in-prod"
-```
-
----
-
-### RAG
-
-#### Ingest a document
-
-```bash
+# Ingest a document
 curl -X POST http://localhost:8000/api/v1/rag/ingest \
-  -H "X-API-Key: dev-secret-key-change-in-prod" \
-  -F "file=@data/sample_docs/company_overview.md"
-```
+  -H "Authorization: Bearer <token>" \
+  -F "file=@path/to/document.pdf"
 
-#### Ingest all sample documents at once (ETL script)
-
-```bash
-python -m pipelines.etl data/sample_docs/
-```
-
-#### Query the knowledge base
-
-```bash
+# Query the knowledge base
 curl -X POST http://localhost:8000/api/v1/rag/query \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-secret-key-change-in-prod" \
-  -d '{"query": "What products does NovaTech AI offer?"}'
-```
+  -H "Authorization: Bearer <token>" \
+  -d '{"query": "What does our company policy say about remote work?"}'
 
-#### List ingested documents
-
-```bash
+# List ingested documents
 curl http://localhost:8000/api/v1/rag/documents \
-  -H "X-API-Key: dev-secret-key-change-in-prod"
-```
+  -H "Authorization: Bearer <token>"
 
----
+# Batch ingest a directory
+python -m pipelines.etl /path/to/docs/ --chunk-size 512 --chunk-overlap 50
+```
 
 ### Agent
 
-#### Run an agent task
-
 ```bash
+# Run an agent task (uses tools: calculator, time, RAG lookup, summarize)
 curl -X POST http://localhost:8000/api/v1/agent/run \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-secret-key-change-in-prod" \
+  -H "Authorization: Bearer <token>" \
   -d '{"task": "What is 15% of 4200? Also, what time is it now?"}'
+
+# Check run status
+curl http://localhost:8000/api/v1/agent/<run_id>/status \
+  -H "Authorization: Bearer <token>"
 ```
 
-#### Check run status
+### API Tokens
+
+For programmatic access without JWT login:
 
 ```bash
-curl http://localhost:8000/api/v1/agent/<run_id>/status \
-  -H "X-API-Key: dev-secret-key-change-in-prod"
+# Create an API token
+curl -X POST http://localhost:8000/api/v1/tokens/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"name": "my-script"}'
+# Returns a bob_xxx... token — save it, it's shown only once
+
+# Use the token (pass as Bearer token)
+curl http://localhost:8000/api/v1/chat/sessions \
+  -H "Authorization: Bearer bob_xxx..."
 ```
 
 ---
 
-## Switching Between Providers
+## Switching LLM Providers
 
-### Local (LM Studio — default)
+### Local (LM Studio / Ollama — default)
 
 ```env
 LLM_PROVIDER=local
 LOCAL_MODEL_BASE_URL=http://localhost:1234/v1
-LOCAL_MODEL_NAME=lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF
+LOCAL_MODEL_NAME=your-model-name
 LOCAL_MODEL_API_KEY=not-needed
 ```
 
@@ -199,29 +262,12 @@ LOCAL_MODEL_API_KEY=not-needed
 
 ```env
 LLM_PROVIDER=bedrock
-AWS_ACCESS_KEY_ID=AKIA...
+AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 AWS_DEFAULT_REGION=us-east-1
 ```
 
-> Make sure your IAM user/role has `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` permissions.
-
----
-
-## Ingesting Documents
-
-```bash
-# Single file via API
-curl -X POST http://localhost:8000/api/v1/rag/ingest \
-  -H "X-API-Key: dev-secret-key-change-in-prod" \
-  -F "file=@/path/to/your/document.pdf"
-
-# Batch ingest an entire directory
-python -m pipelines.etl /path/to/docs/ --chunk-size 512 --chunk-overlap 50
-
-# Dry run (discover files without ingesting)
-python -m pipelines.etl /path/to/docs/ --dry-run
-```
+Your IAM user/role needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` permissions.
 
 ---
 
@@ -229,34 +275,28 @@ python -m pipelines.etl /path/to/docs/ --dry-run
 
 ```bash
 pytest
-```
-
-Run with verbose output:
-
-```bash
 pytest -v --tb=short
 ```
 
 ---
 
-## Environment Variables Reference
+## Deployment (AWS)
 
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_PROVIDER` | `local` | LLM backend: `bedrock` or `local` |
-| `AWS_ACCESS_KEY_ID` | — | AWS access key (Bedrock only) |
-| `AWS_SECRET_ACCESS_KEY` | — | AWS secret key (Bedrock only) |
-| `AWS_DEFAULT_REGION` | `us-east-1` | AWS region (Bedrock only) |
-| `LOCAL_MODEL_BASE_URL` | `http://model-lab.webdirect.ro/v1` | OpenAI-compatible server URL |
-| `LOCAL_MODEL_NAME` | `qwen3-30b` | Model name at the local server |
-| `LOCAL_MODEL_API_KEY` | `not-needed` | API key for local server |
-| `API_KEY` | `dev-secret-key-change-in-prod` | X-API-Key value for auth |
-| `SYSTEM_PROMPT` | `You are a helpful AI assistant.` | Default system prompt |
-| `CHROMA_HOST` | `localhost` | ChromaDB host |
-| `CHROMA_PORT` | `8001` | ChromaDB port |
-| `CHROMA_USE_HTTP` | `false` | Use HTTP client vs. local persistence |
-| `LOG_LEVEL` | `INFO` | Python logging level |
-| `CORS_ORIGINS` | `http://localhost:3000,...` | Comma-separated allowed origins |
+Bob includes a CloudFormation template and deploy script for single-instance AWS deployment (EC2 + MariaDB + nginx + CloudFront).
+
+```bash
+# 1. Configure deployment
+cp infra/scripts/deploy.env.example infra/scripts/deploy.env
+# Edit deploy.env with your AWS and app settings
+
+# 2. Deploy infrastructure + code
+./deploy --infra
+
+# 3. Subsequent code-only deploys
+./deploy
+```
+
+See `infra/scripts/deploy.env.example` for all available configuration options.
 
 ---
 
@@ -266,40 +306,56 @@ pytest -v --tb=short
 bob/
 ├── api/
 │   ├── main.py              # FastAPI app, middleware, routers
-│   ├── dependencies.py      # DI providers (LLM, memory, RAG, agent)
+│   ├── dependencies.py      # DI providers (LLM, auth, RAG, agent)
 │   └── routes/
-│       ├── chat.py          # Conversational chat with memory + SSE
-│       ├── rag.py           # RAG ingestion and querying
-│       └── agent.py         # Strands agent task runner
+│       ├── auth.py           # JWT login, register, user management
+│       ├── chat.py           # Conversational chat with memory + SSE
+│       ├── rag.py            # RAG ingestion and querying
+│       ├── agent.py          # Strands agent task runner
+│       ├── tenants.py        # Tenant administration
+│       └── tokens.py         # API token CRUD
 ├── core/
+│   ├── auth/
+│   │   ├── service.py        # User/auth business logic
+│   │   ├── jwt.py            # JWT token encode/decode
+│   │   ├── api_tokens.py     # API token hashing & validation
+│   │   └── email.py          # SMTP notifications (approval emails)
+│   ├── database/
+│   │   ├── engine.py         # Async SQLAlchemy engine
+│   │   └── models.py         # ORM models (User, Tenant, ApiToken, etc.)
 │   ├── llm/
-│   │   ├── base.py          # Abstract BaseLLMProvider
-│   │   ├── bedrock.py       # Amazon Bedrock provider (boto3)
-│   │   └── local.py         # Local/OpenAI-compatible provider
+│   │   ├── base.py           # Abstract BaseLLMProvider
+│   │   ├── bedrock.py        # Amazon Bedrock provider (boto3)
+│   │   └── local.py          # OpenAI-compatible provider
 │   ├── memory/
-│   │   └── conversation.py  # In-memory session store
+│   │   └── conversation.py   # In-memory session store
 │   ├── rag/
-│   │   ├── ingestion.py     # Document ingestion pipeline
-│   │   ├── retriever.py     # ChromaDB wrapper
-│   │   └── pipeline.py      # RAG query pipeline
-│   └── agent/
-│       ├── orchestrator.py  # Strands agent orchestrator + run history
-│       └── tools.py         # Agent tools: calculator, time, RAG lookup, summarize
+│   │   ├── ingestion.py      # Document ingestion pipeline
+│   │   ├── retriever.py      # ChromaDB wrapper
+│   │   └── pipeline.py       # RAG query pipeline
+│   ├── agent/
+│   │   ├── orchestrator.py   # Strands agent orchestrator
+│   │   └── tools.py          # Agent tools
+│   └── tenant/
+│       └── service.py        # Tenant provisioning
+├── bob-ui/                    # React frontend (Vite + TypeScript + Tailwind)
+│   ├── src/
+│   │   ├── components/        # Chat, RAG, Agent, Auth, Settings panels
+│   │   ├── api/client.ts      # Typed API client
+│   │   └── store/             # Auth & settings state
+│   └── package.json
+├── alembic/                   # Database migrations
+│   └── versions/
 ├── pipelines/
-│   └── etl.py               # Batch document ingestion CLI
-├── infrastructure/
-│   └── Dockerfile           # Production Docker image
+│   └── etl.py                 # Batch document ingestion CLI
+├── infra/
+│   ├── cloudformation/        # AWS CloudFormation templates
+│   └── scripts/               # Deploy scripts & config
 ├── tests/
-│   ├── test_chat.py
-│   ├── test_rag.py
-│   └── test_agent.py
-├── data/
-│   └── sample_docs/         # Sample markdown documents for demo
-│       ├── company_overview.md
-│       ├── product_faq.md
-│       └── technical_docs.md
 ├── .env.example
+├── alembic.ini
 ├── requirements.txt
+├── requirements-prod.txt
 ├── pytest.ini
 └── README.md
 ```
@@ -311,15 +367,15 @@ bob/
 | Technology | Role |
 |---|---|
 | **FastAPI** | Async REST API framework |
-| **Pydantic v2** | Request/response validation and schemas |
+| **SQLAlchemy 2** | Async ORM for user/tenant data |
+| **Alembic** | Database migrations |
 | **Strands Agents** | Agent orchestration and tool use |
-| **LangChain** | Document loading, splitting, RAG pipeline |
-| **ChromaDB** | Local vector store for embeddings |
+| **LangChain** | Document loading, splitting, embeddings |
+| **ChromaDB** | Local vector store |
 | **Amazon Bedrock** | Managed LLM inference (Claude, Titan) |
-| **openai (SDK)** | OpenAI-compatible client for local models |
-| **sentence-transformers** | Local embedding fallback |
-| **boto3** | AWS SDK for Bedrock and DynamoDB |
+| **openai SDK** | OpenAI-compatible client for local models |
+| **React + Vite** | Frontend SPA |
+| **Tailwind CSS** | UI styling |
+| **boto3** | AWS SDK |
 | **uvicorn** | ASGI server |
 | **pytest** | Test framework |
-| **python-dotenv** | Environment variable management |
-# bob

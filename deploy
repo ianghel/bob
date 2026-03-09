@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Quick deploy — runs the full deploy pipeline
+# Usage: ./deploy
+exec ./infra/scripts/deploy.sh "$@"

@@ -1,0 +1,420 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Bob AI Agent infrastructure: EC2 instance with MariaDB, nginx reverse proxy,
+  CloudFront CDN with HTTPS, and Route53 DNS. Single subdomain with path-based
+  routing: /api/* -> FastAPI, /* -> React SPA.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: bob-prod
+    Description: Stack name used for tagging and resource naming.
+  DomainName:
+    Type: String
+    Description: Root Route53 domain (e.g. teninvent.ro).
+  SubdomainName:
+    Type: String
+    Default: bob
+    Description: Subdomain for the application (e.g. bob -> bob.teninvent.ro).
+  OriginSubdomainName:
+    Type: String
+    Default: bob-origin
+    Description: Subdomain used by CloudFront to reach the EC2 origin.
+  HostedZoneId:
+    Type: String
+    Description: Route53 HostedZoneId for the DomainName.
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues:
+      - t4g.micro
+      - t4g.small
+      - t4g.medium
+      - t3.micro
+      - t3.small
+      - t3.medium
+    Description: EC2 instance type (ARM64 for t4g, x86 for t3).
+  AmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-arm64
+    Description: SSM path to Amazon Linux 2023 AMI (arm64 for t4g instances).
+  RootVolumeSize:
+    Type: Number
+    Default: 30
+    MinValue: 20
+    Description: Size (GiB) of the root EBS gp3 volume.
+  TrustedSshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed for SSH access. Set to your IP/32 for security.
+  KeyPairName:
+    Type: String
+    Description: Existing EC2 key pair name for SSH access.
+  DbPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the MariaDB 'bob' user.
+  ExistingVpcId:
+    Type: String
+    Default: ''
+    Description: Optional existing VPC ID. Leave empty to create a new VPC.
+  ExistingSubnetId:
+    Type: String
+    Default: ''
+    Description: Optional existing Subnet ID. Required if ExistingVpcId is set.
+
+Conditions:
+  CreateNewVpc: !Equals [!Ref ExistingVpcId, '']
+  UseExistingSubnet: !Not [!Equals [!Ref ExistingSubnetId, '']]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Networking (conditional — only if no existing VPC provided)
+  # ---------------------------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Condition: CreateNewVpc
+    Properties:
+      CidrBlock: 10.50.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: CreateNewVpc
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-igw'
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: CreateNewVpc
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Condition: CreateNewVpc
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.50.10.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-public-a'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreateNewVpc
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-public-rt'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Condition: CreateNewVpc
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      RouteTableId: !Ref PublicRouteTable
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVpc
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  # ---------------------------------------------------------------------------
+  # Security Group
+  # ---------------------------------------------------------------------------
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${EnvironmentName} - HTTP/HTTPS/SSH access'
+      VpcId: !If [CreateNewVpc, !Ref VPC, !Ref ExistingVpcId]
+      SecurityGroupIngress:
+        - Description: HTTP (CloudFront origin)
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: HTTPS
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: SSH
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref TrustedSshCidr
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-sg'
+
+  # ---------------------------------------------------------------------------
+  # IAM Role + Instance Profile (SSM access)
+  # ---------------------------------------------------------------------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-role'
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref InstanceRole
+
+  # ---------------------------------------------------------------------------
+  # EC2 Instance
+  # ---------------------------------------------------------------------------
+  AppServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref InstanceProfile
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AmiId
+      SubnetId: !If [UseExistingSubnet, !Ref ExistingSubnetId, !Ref PublicSubnet]
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      KeyName: !Ref KeyPairName
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref RootVolumeSize
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-app'
+        - Key: Application
+          Value: bob
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee /var/log/user-data.log) 2>&1
+
+          echo "=== Bob EC2 provisioning starting ==="
+          dnf update -y
+
+          # --- Python 3.11 ---
+          dnf install -y python3.11 python3.11-pip python3.11-devel
+
+          # --- Build tools (for native Python packages on ARM64) ---
+          dnf install -y gcc gcc-c++ make git
+
+          # --- MariaDB ---
+          dnf install -y mariadb105-server
+          systemctl enable mariadb
+          systemctl start mariadb
+
+          mysql -e "CREATE DATABASE IF NOT EXISTS bob CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+          mysql -e "CREATE USER IF NOT EXISTS 'bob'@'localhost' IDENTIFIED BY '${DbPassword}';"
+          mysql -e "GRANT ALL PRIVILEGES ON bob.* TO 'bob'@'localhost'; FLUSH PRIVILEGES;"
+
+          # --- nginx ---
+          dnf install -y nginx
+          systemctl enable nginx
+          rm -f /etc/nginx/conf.d/default.conf
+
+          # --- Node.js 20 (for frontend build) ---
+          curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+          dnf install -y nodejs
+
+          # --- libmagic (for python-magic file detection) ---
+          dnf install -y file file-libs
+
+          # --- Swap (1GB — helps pip install on 2GB RAM instances) ---
+          if [ ! -f /swapfile ]; then
+            fallocate -l 1G /swapfile
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+          fi
+
+          # --- App directory ---
+          mkdir -p /app/bob/data/chroma_db
+          chown -R ec2-user:ec2-user /app/bob
+
+          echo "=== Bob EC2 provisioning complete ==="
+
+  # ---------------------------------------------------------------------------
+  # Elastic IP
+  # ---------------------------------------------------------------------------
+  InstanceEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref AppServer
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-eip'
+
+  # ---------------------------------------------------------------------------
+  # Route53 — Origin A record (CloudFront connects to this)
+  # ---------------------------------------------------------------------------
+  OriginDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${OriginSubdomainName}.${DomainName}'
+      Type: A
+      TTL: 60
+      ResourceRecords:
+        - !Ref InstanceEip
+
+  # ---------------------------------------------------------------------------
+  # ACM Certificate (auto-validated via Route53 DNS)
+  # ---------------------------------------------------------------------------
+  SSLCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '${SubdomainName}.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub '${SubdomainName}.${DomainName}'
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-cert'
+
+  # ---------------------------------------------------------------------------
+  # CloudFront Distribution
+  # Single distribution, path-based routing:
+  #   /api/*  → CachingDisabled (API + SSE streaming)
+  #   /health → CachingDisabled
+  #   /*      → CachingOptimized (React SPA + static assets)
+  # ---------------------------------------------------------------------------
+  CDNDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: OriginDNSRecord
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        PriceClass: PriceClass_100
+        Comment: !Sub 'Bob (${EnvironmentName})'
+        Aliases:
+          - !Sub '${SubdomainName}.${DomainName}'
+        Origins:
+          - Id: ec2-origin
+            DomainName: !Sub '${OriginSubdomainName}.${DomainName}'
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+
+        # --- API behavior: no caching, forward everything, SSE streaming ---
+        CacheBehaviors:
+          - PathPattern: '/api/*'
+            TargetOriginId: ec2-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad    # CachingDisabled
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3  # AllViewer
+          - PathPattern: '/health'
+            TargetOriginId: ec2-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad    # CachingDisabled
+          - PathPattern: '/docs'
+            TargetOriginId: ec2-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad    # CachingDisabled
+          - PathPattern: '/redoc'
+            TargetOriginId: ec2-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad    # CachingDisabled
+          - PathPattern: '/openapi.json'
+            TargetOriginId: ec2-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad    # CachingDisabled
+
+        # --- Default behavior: SPA static files (cached) ---
+        DefaultCacheBehavior:
+          TargetOriginId: ec2-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6      # CachingOptimized
+
+        # SPA routing is handled by nginx try_files (not CloudFront).
+        # Custom error responses are NOT used here because they would
+        # intercept API 403/404 responses and replace them with index.html.
+
+        ViewerCertificate:
+          AcmCertificateArn: !Ref SSLCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+
+  # ---------------------------------------------------------------------------
+  # Route53 — Public alias record → CloudFront
+  # ---------------------------------------------------------------------------
+  PublicAliasRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '${SubdomainName}.${DomainName}'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CDNDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront fixed hosted zone ID
+
+Outputs:
+  ApplicationUrl:
+    Description: Public URL for Bob
+    Value: !Sub 'https://${SubdomainName}.${DomainName}'
+  ElasticIp:
+    Description: Elastic IP assigned to the EC2 instance
+    Value: !Ref InstanceEip
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref AppServer
+  DistributionId:
+    Description: CloudFront Distribution ID (for cache invalidation)
+    Value: !Ref CDNDistribution
+  DistributionDomain:
+    Description: CloudFront domain name
+    Value: !GetAtt CDNDistribution.DomainName
+  SsmUrl:
+    Description: AWS Systems Manager Session Manager URL
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/systems-manager/managed-instances/${AppServer}'

@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  html {
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+  }
+
+  body {
+    @apply bg-surface-950 text-gray-100 antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overscroll-behavior: none;
+  }
+
+  /* Prevent iOS auto-zoom on input focus (triggers at < 16px) */
+  @supports (-webkit-touch-callout: none) {
+    input, textarea, select {
+      font-size: 16px !important;
+    }
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-600 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-zinc-500;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-indigo-600 hover:bg-indigo-500 text-white;
+  }
+
+  .btn-ghost {
+    @apply btn hover:bg-surface-700 text-gray-300 hover:text-gray-100;
+  }
+
+  .btn-danger {
+    @apply btn hover:bg-red-900/40 text-red-400 hover:text-red-300;
+  }
+
+  .input {
+    @apply w-full bg-surface-800 border border-surface-600 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors;
+  }
+
+  .card {
+    @apply bg-surface-800 border border-surface-700 rounded-xl p-4;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+}
+
+.prose-bob {
+  @apply text-gray-200 text-sm leading-relaxed;
+}
+
+.prose-bob p { @apply mb-3 last:mb-0; }
+.prose-bob pre { @apply bg-surface-900 rounded-lg p-3 overflow-x-auto text-xs my-3; }
+.prose-bob code { @apply bg-surface-700 px-1 py-0.5 rounded text-xs font-mono text-indigo-300; }
+.prose-bob pre code { @apply bg-transparent p-0 text-gray-300; }
+.prose-bob ul, .prose-bob ol { @apply pl-5 mb-3 space-y-1; }
+.prose-bob ul { @apply list-disc; }
+.prose-bob ol { @apply list-decimal; }
+.prose-bob h1, .prose-bob h2, .prose-bob h3 { @apply font-semibold text-gray-100 mb-2 mt-4 first:mt-0; }
+.prose-bob h1 { @apply text-lg; }
+.prose-bob h2 { @apply text-base; }
+.prose-bob h3 { @apply text-sm; }
+.prose-bob a { @apply text-indigo-400 hover:text-indigo-300 underline; }
+.prose-bob blockquote { @apply border-l-2 border-indigo-500 pl-3 text-gray-400 italic my-3; }
+.prose-bob hr { @apply border-surface-600 my-4; }
+.prose-bob table { @apply w-full text-xs border-collapse my-3; }
+.prose-bob th { @apply bg-surface-700 px-3 py-1.5 text-left font-medium border border-surface-600; }
+.prose-bob td { @apply px-3 py-1.5 border border-surface-700; }

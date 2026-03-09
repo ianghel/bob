@@ -1,0 +1,57 @@
+# ============================================================
+# Production dependencies for Bob
+# (excludes torch, sentence-transformers, and test packages)
+# ============================================================
+
+# Core Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.12
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+
+# HTTP client (for local/OpenAI-compatible provider)
+openai>=1.51.0
+httpx>=0.27.0
+
+# AWS / Amazon Bedrock
+boto3>=1.35.0
+botocore>=1.35.0
+
+# LangChain RAG Stack
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-chroma>=0.1.4
+langchain-text-splitters>=0.3.0
+
+# Vector Store
+chromadb>=0.5.0
+
+# Document Loaders
+pypdf>=4.3.0
+unstructured>=0.15.0
+docx2txt>=0.8
+
+# Strands Agents
+strands-agents>=0.1.0
+
+# Database (MySQL + async SQLAlchemy)
+sqlalchemy[asyncio]>=2.0.0
+aiomysql>=0.2.0
+alembic>=1.13.0
+pymysql>=1.1.0
+
+# Authentication
+pyjwt>=2.8.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0
+
+# Email (async SMTP)
+aiosmtplib>=3.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+python-magic>=0.4.27

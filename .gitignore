@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+deploy.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (local vector store & uploads)
+data/
+
+# Node
+node_modules/
+bob-ui/dist/
+
+# Claude
+.claude/
+
+# Logs
+*.log
+
+# Legacy scripts (teninvent project — not part of Bob)
+/scripts/
+/cloudformation/
+
+# Teninvent CloudFormation template (not Bob)
+infra/cloudformation/tensurvey-infra.yaml

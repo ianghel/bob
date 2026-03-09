@@ -379,3 +379,9 @@ bob/
 | **boto3** | AWS SDK |
 | **uvicorn** | ASGI server |
 | **pytest** | Test framework |
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

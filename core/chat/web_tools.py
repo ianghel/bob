@@ -1,6 +1,6 @@
 """Web search and fetch tools for chat-mode tool calling.
 
-Provides DuckDuckGo-based search (general + products) and webpage fetching.
+Provides Bing-based search (general + products) and webpage fetching.
 Tools are exposed as OpenAI function-calling schemas so the LLM can decide
 when to invoke them.
 """
@@ -8,31 +8,61 @@ when to invoke them.
 import json
 import logging
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ro;q=0.8",
+}
 
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
 
+def _bing_search(query: str, max_results: int = 5) -> list[dict]:
+    """Scrape Bing search results and return a list of {title, body, href}."""
+    url = f"https://www.bing.com/search?q={quote_plus(query)}&count={max_results}"
+    with httpx.Client(timeout=15, follow_redirects=True) as client:
+        resp = client.get(url, headers=_SEARCH_HEADERS)
+        resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    results = []
+    for li in soup.select("li.b_algo"):
+        a_tag = li.select_one("h2 a")
+        if not a_tag:
+            continue
+        title = a_tag.get_text(strip=True)
+        href = a_tag.get("href", "")
+        snippet_tag = li.select_one("p") or li.select_one(".b_caption p")
+        body = snippet_tag.get_text(strip=True) if snippet_tag else ""
+        results.append({"title": title, "body": body, "href": href})
+        if len(results) >= max_results:
+            break
+    return results
+
+
 def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web using DuckDuckGo and return formatted results."""
+    """Search the web using Bing and return formatted results."""
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
+        results = _bing_search(query, max_results)
         if not results:
             return f"No results found for: {query}"
         parts = []
         for i, r in enumerate(results, 1):
-            title = r.get("title", "")
-            body = r.get("body", "")
-            href = r.get("href", "")
-            parts.append(f"{i}. **{title}**\n   {body}\n   URL: {href}")
+            parts.append(
+                f"{i}. **{r['title']}**\n   {r['body']}\n   URL: {r['href']}"
+            )
         return "\n\n".join(parts)
     except Exception as e:
         logger.error("web_search error: %s", e)
@@ -40,22 +70,18 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 
 def search_products(query: str, max_results: int = 5) -> str:
-    """Search for products with price-oriented results via DuckDuckGo."""
+    """Search for products with price-oriented results via Bing."""
     enriched_query = f"{query} preț cumpără magazin"
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(enriched_query, max_results=max_results))
+        results = _bing_search(enriched_query, max_results)
         if not results:
             return f"No product results found for: {query}"
         parts = []
         for i, r in enumerate(results, 1):
-            title = r.get("title", "")
-            body = r.get("body", "")
-            href = r.get("href", "")
             parts.append(
-                f"{i}. **{title}**\n"
-                f"   {body}\n"
-                f"   Link: {href}"
+                f"{i}. **{r['title']}**\n"
+                f"   {r['body']}\n"
+                f"   Link: {r['href']}"
             )
         return "\n\n".join(parts)
     except Exception as e:
@@ -95,7 +121,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "web_search",
             "description": (
-                "Search the internet for information using DuckDuckGo. "
+                "Search the internet for information using Bing. "
                 "Use this for general questions, news, facts, tutorials, etc."
             ),
             "parameters": {

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode, createElement, useCallback } from 'react'
-import { setOnAuthError } from '../api/client'
+import { setOnAuthError, setOnTokenRefresh } from '../api/client'
 
 const STORAGE_KEY = 'bob_auth'
 
@@ -66,11 +66,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(STORAGE_KEY)
   }, [])
 
-  // Register auto-logout on 401 responses
+  // Silently update JWT when the backend sends a refreshed token
+  const updateToken = useCallback((newToken: string) => {
+    setAuth(prev => prev.token ? { ...prev, token: newToken } : prev)
+  }, [])
+
+  // Register auto-logout on 401 and auto-refresh on X-New-Token
   useEffect(() => {
     setOnAuthError(logout)
-    return () => setOnAuthError(null)
-  }, [logout])
+    setOnTokenRefresh(updateToken)
+    return () => {
+      setOnAuthError(null)
+      setOnTokenRefresh(null)
+    }
+  }, [logout, updateToken])
 
   const isAuthenticated = !!auth.token && !!auth.user
 

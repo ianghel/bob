@@ -4,6 +4,10 @@
 let _onAuthError: (() => void) | null = null
 export function setOnAuthError(fn: (() => void) | null) { _onAuthError = fn }
 
+// Global token-refresh handler — set by AuthProvider to silently update the stored JWT
+let _onTokenRefresh: ((newToken: string) => void) | null = null
+export function setOnTokenRefresh(fn: ((newToken: string) => void) | null) { _onTokenRefresh = fn }
+
 // ---------------------------------------------------------------------------
 // Request timeout helper
 // ---------------------------------------------------------------------------
@@ -151,12 +155,21 @@ function authHeadersNoBody(auth: AuthHeaders): HeadersInit {
   }
 }
 
-/** Check response for 401 and trigger auto-logout */
+/** Extract X-New-Token from response and silently update stored JWT */
+function _maybeRefreshToken(res: Response): void {
+  const newToken = res.headers.get('X-New-Token')
+  if (newToken && _onTokenRefresh) {
+    _onTokenRefresh(newToken)
+  }
+}
+
+/** Check response for 401 and trigger auto-logout, also handle token refresh */
 function check401(res: Response): Response {
   if (res.status === 401 && _onAuthError) {
     _onAuthError()
     throw new Error('Session expired — please sign in again')
   }
+  _maybeRefreshToken(res)
   return res
 }
 

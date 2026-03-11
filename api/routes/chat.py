@@ -388,7 +388,7 @@ async def chat_upload(
 
     # Ingest into knowledge base
     ingest_result = await ingestion.ingest_bytes(
-        data=file_bytes,
+        content=file_bytes,
         filename=file.filename or "upload",
         tenant_id=tenant.id,
         metadata={"uploaded_by": user.id, "source": "chat-upload"},

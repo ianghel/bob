@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -64,8 +65,27 @@ class ConversationMemory:
             tenant_id=tenant_id,
             user_id=user_id,
         )
-        db.add(conversation)
-        await db.flush()
+        try:
+            db.add(conversation)
+            await db.flush()
+        except IntegrityError:
+            # Race condition or stale session — conversation already exists
+            await db.rollback()
+            stmt = (
+                select(Conversation)
+                .options(selectinload(Conversation.turns))
+                .where(Conversation.id == new_id)
+            )
+            result = await db.execute(stmt)
+            conversation = result.scalar_one_or_none()
+            if conversation:
+                logger.debug("Recovered existing conversation: %s", new_id)
+                return conversation
+            # If still not found, generate a fresh ID
+            new_id = str(uuid.uuid4())
+            conversation = Conversation(id=new_id, tenant_id=tenant_id, user_id=user_id)
+            db.add(conversation)
+            await db.flush()
 
         # Re-fetch with eager-loaded turns to avoid lazy-load in async context
         stmt = (

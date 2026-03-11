@@ -29,6 +29,7 @@ class LLMResponse(BaseModel):
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     stop_reason: Optional[str] = None
+    tools_used: Optional[list[dict]] = None
 
 
 class BaseLLMProvider(ABC):

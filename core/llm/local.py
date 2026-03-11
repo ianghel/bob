@@ -133,6 +133,93 @@ class LocalProvider(BaseLLMProvider):
             logger.error("LocalProvider stream error: %s", e)
             raise
 
+    async def chat_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict],
+        tool_executor,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        system_prompt: Optional[str] = None,
+        max_rounds: int = 5,
+    ) -> LLMResponse:
+        """Chat with OpenAI-compatible function calling.
+
+        Sends messages + tool definitions to the model. When the model responds
+        with tool_calls, executes them via ``tool_executor`` and feeds the
+        results back until the model produces a final text response.
+
+        Args:
+            messages: Conversation history.
+            tools: OpenAI function-calling tool schemas.
+            tool_executor: ``(name: str, arguments: str|dict) -> str`` callable.
+            max_tokens: Max tokens per LLM call.
+            temperature: Sampling temperature.
+            system_prompt: Optional system prompt override.
+            max_rounds: Safety cap on tool-call round-trips.
+
+        Returns:
+            LLMResponse with final content and tools_used metadata.
+        """
+        openai_messages = self._build_openai_messages(messages, system_prompt)
+        tools_used: list[dict] = []
+
+        for _ in range(max_rounds):
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self.model_name,
+                    messages=openai_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    tools=tools,
+                    tool_choice="auto",
+                    stream=False,
+                )
+            except Exception as e:
+                logger.error("LocalProvider chat_with_tools error: %s", e)
+                raise
+
+            choice = response.choices[0]
+
+            # If no tool calls, we have the final answer
+            if not choice.message.tool_calls:
+                usage = response.usage
+                return LLMResponse(
+                    content=choice.message.content or "",
+                    model=self.model_name,
+                    input_tokens=usage.prompt_tokens if usage else None,
+                    output_tokens=usage.completion_tokens if usage else None,
+                    stop_reason=choice.finish_reason,
+                    tools_used=tools_used or None,
+                )
+
+            # Append assistant message with tool calls
+            openai_messages.append(choice.message.model_dump())
+
+            # Execute each tool call and append results
+            for tc in choice.message.tool_calls:
+                fn_name = tc.function.name
+                fn_args = tc.function.arguments
+                logger.info("Tool call: %s(%s)", fn_name, fn_args[:200] if isinstance(fn_args, str) else fn_args)
+
+                result = tool_executor(fn_name, fn_args)
+                tools_used.append({"name": fn_name, "arguments": fn_args, "result_preview": result[:200]})
+
+                openai_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+
+        # Exhausted rounds — return whatever we have
+        logger.warning("chat_with_tools hit max_rounds=%d", max_rounds)
+        last_content = openai_messages[-1].get("content", "") if openai_messages else ""
+        return LLMResponse(
+            content=last_content,
+            model=self.model_name,
+            tools_used=tools_used or None,
+        )
+
     async def embed(self, text: str) -> list[float]:
         """Generate an embedding vector for the given text.
 

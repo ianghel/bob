@@ -1,11 +1,13 @@
-"""Chat endpoint with conversation memory, SSE streaming, and RAG integration."""
+"""Chat endpoint with conversation memory, SSE streaming, RAG, and web search."""
 
 import json
 import logging
 import uuid
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+import httpx
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -17,8 +19,10 @@ from api.dependencies import (
     LLMDep,
     RetrieverDep,
 )
+from core.chat.web_tools import TOOL_SCHEMAS, execute_tool
 from core.config import get_settings
 from core.llm.base import Message, MessageRole
+from core.llm.local import LocalProvider
 from core.memory.context_manager import ContextManager
 from core.memory.conversation import ConversationMemory, conversation_to_text
 
@@ -50,6 +54,7 @@ class ChatRequest(BaseModel):
     temperature: float = Field(0.7, ge=0.0, le=1.0)
     use_knowledge: bool = Field(True, description="Query RAG knowledge base for context")
     knowledge_k: int = Field(4, ge=1, le=20, description="Number of RAG chunks to retrieve")
+    use_web_search: bool = Field(True, description="Enable web search tools (search, products, fetch)")
 
 
 class ChatResponse(BaseModel):
@@ -63,6 +68,8 @@ class ChatResponse(BaseModel):
     output_tokens: Optional[int] = None
     knowledge_used: bool = False
     knowledge_sources: Optional[list[str]] = None
+    web_search_used: bool = False
+    tools_used: Optional[list[str]] = None
 
 
 class SessionSummary(BaseModel):
@@ -201,19 +208,34 @@ async def chat(
             },
         )
 
-    # Non-streaming response
+    # Non-streaming response — with optional tool calling
+    _settings2 = get_settings()
+    use_tools = request.use_web_search and _settings2.web_search_enabled and isinstance(llm, LocalProvider)
+
     try:
-        response = await llm.chat(
-            messages=messages,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-        )
+        if use_tools:
+            response = await llm.chat_with_tools(
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                tool_executor=execute_tool,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+            )
+        else:
+            response = await llm.chat(
+                messages=messages,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+            )
     except Exception as e:
         logger.error("LLM chat error for session %s: %s", session_id, e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"LLM provider error: {e}",
         )
+
+    tools_used_names = [t["name"] for t in response.tools_used] if response.tools_used else None
+    web_search_used = bool(response.tools_used)
 
     await _memory.save_turn(
         db=db,
@@ -232,6 +254,8 @@ async def chat(
         output_tokens=response.output_tokens,
         knowledge_used=request.use_knowledge and knowledge_sources is not None,
         knowledge_sources=knowledge_sources,
+        web_search_used=web_search_used,
+        tools_used=tools_used_names,
     )
 
 
@@ -273,6 +297,209 @@ async def _stream_chat(
     except Exception as e:
         logger.error("Stream error for session %s: %s", session_id, e)
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+
+# ---------------------------------------------------------------------------
+# File upload in chat
+# ---------------------------------------------------------------------------
+
+_ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md", ".docx"}
+_MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+
+
+class ChatUploadResponse(BaseModel):
+    session_id: str
+    message_id: str
+    content: str
+    document_id: str
+    filename: str
+    chunks: int
+
+
+@router.post("/upload", response_model=ChatUploadResponse, summary="Upload file to chat")
+async def chat_upload(
+    db: DBSessionDep,
+    llm: LLMDep,
+    user: CurrentUserDep,
+    tenant: CurrentTenantDep,
+    retriever: RetrieverDep,
+    ingestion: IngestionDep,
+    file: UploadFile = File(...),
+    message: str = Form(""),
+    session_id: Optional[str] = Form(None),
+) -> ChatUploadResponse:
+    """Upload a file in chat — auto-ingests into knowledge base and responds about content."""
+    # Validate extension
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {suffix}. Allowed: {', '.join(_ALLOWED_EXTENSIONS)}",
+        )
+
+    # Read and validate size
+    file_bytes = await file.read()
+    if len(file_bytes) > _MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size: {_MAX_UPLOAD_SIZE // (1024*1024)} MB",
+        )
+
+    # Ingest into knowledge base
+    ingest_result = await ingestion.ingest_bytes(
+        data=file_bytes,
+        filename=file.filename or "upload",
+        tenant_id=tenant.id,
+        metadata={"uploaded_by": user.id, "source": "chat-upload"},
+    )
+
+    # Get or create session
+    session = await _memory.get_or_create_session(
+        db=db, tenant_id=tenant.id, user_id=user.id, session_id=session_id,
+    )
+
+    # Retrieve context from the freshly ingested document
+    rag_docs = await retriever.similarity_search(
+        query=message or f"Content of {file.filename}",
+        k=6,
+        tenant_id=tenant.id,
+    )
+    context_parts = []
+    for i, doc in enumerate(rag_docs, 1):
+        context_parts.append(f"[Chunk {i}]\n{doc.page_content}")
+    context_text = "\n\n".join(context_parts)
+
+    # Ask LLM about the file
+    user_msg = (
+        f"The user uploaded a file: {file.filename} "
+        f"({len(file_bytes)} bytes, {ingest_result.chunks} chunks ingested). "
+        f"{message}" if message else
+        f"The user uploaded a file: {file.filename} "
+        f"({len(file_bytes)} bytes, {ingest_result.chunks} chunks ingested). "
+        f"Summarize what this file contains."
+    )
+    _settings = get_settings()
+    system_prompt = (
+        f"{_settings.system_prompt}\n\n"
+        f"File content from {file.filename}:\n{context_text}\n\n"
+        "Use the file content above to answer the user's question about the file."
+    )
+
+    messages = [
+        Message(role=MessageRole.SYSTEM, content=system_prompt),
+        Message(role=MessageRole.USER, content=user_msg),
+    ]
+
+    try:
+        response = await llm.chat(messages=messages, max_tokens=4096, temperature=0.5)
+    except Exception as e:
+        logger.error("LLM error during upload chat: %s", e)
+        response_content = (
+            f"File {file.filename} uploaded and ingested into the knowledge base "
+            f"({ingest_result.chunks} chunks). However, I could not generate a summary: {e}"
+        )
+    else:
+        response_content = response.content
+
+    await _memory.save_turn(
+        db=db, session_id=session.id,
+        user_message=f"[Uploaded: {file.filename}] {message}",
+        assistant_message=response_content,
+    )
+    await db.commit()
+
+    return ChatUploadResponse(
+        session_id=session.id,
+        message_id=str(uuid.uuid4()),
+        content=response_content,
+        document_id=ingest_result.document_id,
+        filename=file.filename or "upload",
+        chunks=ingest_result.chunks,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fetch URL endpoint
+# ---------------------------------------------------------------------------
+
+
+class FetchUrlRequest(BaseModel):
+    url: str = Field(..., description="URL to fetch")
+    session_id: Optional[str] = Field(None, description="Session ID")
+
+
+class FetchUrlResponse(BaseModel):
+    session_id: str
+    url: str
+    content_preview: str
+    document_id: str
+    chunks: int
+
+
+@router.post("/fetch-url", response_model=FetchUrlResponse, summary="Fetch URL and ingest")
+async def fetch_url(
+    request: FetchUrlRequest,
+    db: DBSessionDep,
+    user: CurrentUserDep,
+    tenant: CurrentTenantDep,
+    ingestion: IngestionDep,
+) -> FetchUrlResponse:
+    """Fetch content from a URL, ingest into knowledge base, return preview."""
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(
+                request.url,
+                headers={"User-Agent": "Mozilla/5.0 (Bob-Agent)"},
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to fetch URL: {e}",
+        )
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header"]):
+        tag.decompose()
+    text = soup.get_text(separator="\n", strip=True)
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    clean_text = "\n".join(lines)
+
+    # Ingest into knowledge base
+    ingest_result = await ingestion.ingest_text(
+        text=clean_text,
+        source_name=request.url,
+        metadata={
+            "fetched_by": user.id,
+            "source_type": "web-fetch",
+            "url": request.url,
+        },
+        tenant_id=tenant.id,
+    )
+
+    # Get or create session for tracking
+    session = await _memory.get_or_create_session(
+        db=db, tenant_id=tenant.id, user_id=user.id, session_id=request.session_id,
+    )
+
+    await _memory.save_turn(
+        db=db, session_id=session.id,
+        user_message=f"[Fetched URL: {request.url}]",
+        assistant_message=f"Fetched and ingested {len(clean_text)} characters from {request.url} ({ingest_result.chunks} chunks).",
+    )
+    await db.commit()
+
+    preview = clean_text[:2000] + ("..." if len(clean_text) > 2000 else "")
+
+    return FetchUrlResponse(
+        session_id=session.id,
+        url=request.url,
+        content_preview=preview,
+        document_id=ingest_result.document_id,
+        chunks=ingest_result.chunks,
+    )
 
 
 # NOTE: /sessions MUST come before /{session_id}/* routes to avoid

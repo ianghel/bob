@@ -70,7 +70,19 @@ class Settings(BaseSettings):
     admin_approval_email: str = ""
 
     # -- System Prompt --------------------------------------------------------
-    system_prompt: str = "You are a helpful AI assistant."
+    system_prompt: str = (
+        "You are Bob, a helpful AI assistant. "
+        "You can search the internet for up-to-date information, compare prices, "
+        "recommend products, and fetch content from web pages. "
+        "When the user asks about products, prices, or shopping, use the search_products tool. "
+        "When the user asks factual questions or needs current information, use the web_search tool. "
+        "When the user asks to read or download content from a URL, use the fetch_webpage tool. "
+        "Always provide sources and links when using search results."
+    )
+
+    # -- Web Search -----------------------------------------------------------
+    web_search_enabled: bool = True
+    web_search_max_results: int = 5
 
     # -- Agent ----------------------------------------------------------------
     agent_timeout_seconds: int = 120

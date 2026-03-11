@@ -297,6 +297,36 @@ export async function archiveSession(sessionId: string, settings: Settings, auth
   return res.json()
 }
 
+export interface ChatUploadResponse {
+  session_id: string
+  message_id: string
+  content: string
+  document_id: string
+  filename: string
+  chunks: number
+}
+
+export async function uploadChatFile(
+  file: File,
+  sessionId: string | undefined,
+  message: string,
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<ChatUploadResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('message', message || '')
+  if (sessionId) form.append('session_id', sessionId)
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/upload`, {
+    method: 'POST',
+    headers: authHeadersNoBody(auth),
+    body: form,
+    timeoutMs: 120_000,
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
 // ── RAG ───────────────────────────────────────────────────────────────────
 
 export async function ragQuery(query: string, k: number, settings: Settings, auth: AuthHeaders): Promise<RAGQueryResponse> {

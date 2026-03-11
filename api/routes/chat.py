@@ -188,6 +188,9 @@ async def chat(
         conversation=session,
     )
 
+    _settings2 = get_settings()
+    use_tools = request.use_web_search and _settings2.web_search_enabled and isinstance(llm, LocalProvider)
+
     if request.stream:
         return StreamingResponse(
             _stream_chat(
@@ -200,6 +203,7 @@ async def chat(
                 temperature=request.temperature,
                 knowledge_used=request.use_knowledge and knowledge_sources is not None,
                 knowledge_sources=knowledge_sources,
+                use_tools=use_tools,
             ),
             media_type="text/event-stream",
             headers={
@@ -209,8 +213,6 @@ async def chat(
         )
 
     # Non-streaming response — with optional tool calling
-    _settings2 = get_settings()
-    use_tools = request.use_web_search and _settings2.web_search_enabled and isinstance(llm, LocalProvider)
 
     try:
         if use_tools:
@@ -269,21 +271,51 @@ async def _stream_chat(
     temperature: float,
     knowledge_used: bool = False,
     knowledge_sources: list[str] | None = None,
+    use_tools: bool = False,
 ):
-    """Async generator producing SSE-formatted chunks."""
-    full_response = []
+    """Async generator producing SSE-formatted chunks.
+
+    When use_tools is True and the LLM supports tool calling, performs
+    tool round-trips first (non-streaming), then streams the final response
+    in small chunks to maintain the SSE contract.
+    """
+    tools_used_names: list[str] | None = None
+
     try:
-        async for chunk in llm.stream(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        ):
-            full_response.append(chunk)
-            data = json.dumps({"chunk": chunk, "session_id": session_id})
-            yield f"data: {data}\n\n"
+        if use_tools and isinstance(llm, LocalProvider):
+            # Tool calling: run non-streaming to handle tool round-trips,
+            # then emit the final content as SSE chunks.
+            yield f"data: {json.dumps({'chunk': '', 'session_id': session_id, 'searching': True})}\n\n"
+            response = await llm.chat_with_tools(
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                tool_executor=execute_tool,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            complete_text = response.content
+            tools_used_names = [t["name"] for t in response.tools_used] if response.tools_used else None
+
+            # Emit content in chunks to simulate streaming
+            chunk_size = 20
+            for i in range(0, len(complete_text), chunk_size):
+                chunk = complete_text[i:i + chunk_size]
+                data = json.dumps({"chunk": chunk, "session_id": session_id})
+                yield f"data: {data}\n\n"
+        else:
+            # Standard streaming without tools
+            full_response = []
+            async for chunk in llm.stream(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                full_response.append(chunk)
+                data = json.dumps({"chunk": chunk, "session_id": session_id})
+                yield f"data: {data}\n\n"
+            complete_text = "".join(full_response)
 
         # Save completed turn to memory
-        complete_text = "".join(full_response)
         await _memory.save_turn(
             db=db,
             session_id=session_id,
@@ -292,7 +324,16 @@ async def _stream_chat(
         )
         await db.commit()
 
-        yield f"data: {json.dumps({'done': True, 'session_id': session_id, 'knowledge_used': knowledge_used, 'knowledge_sources': knowledge_sources})}\n\n"
+        done_data: dict = {
+            'done': True,
+            'session_id': session_id,
+            'knowledge_used': knowledge_used,
+            'knowledge_sources': knowledge_sources,
+        }
+        if tools_used_names:
+            done_data['web_search_used'] = True
+            done_data['tools_used'] = tools_used_names
+        yield f"data: {json.dumps(done_data)}\n\n"
 
     except Exception as e:
         logger.error("Stream error for session %s: %s", session_id, e)

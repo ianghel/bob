@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Plus, Trash2, ChevronRight, Send, Square, PanelLeft, X, BookOpen, Archive } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, Send, Square, PanelLeft, X, BookOpen, Archive, Paperclip } from 'lucide-react'
 import { clsx } from 'clsx'
 import ReactMarkdown from 'react-markdown'
 import { useSettings } from '../../store/settings'
 import { useAuth } from '../../store/auth'
-import { sendChat, streamChat, getHistory, deleteSession, listSessions, archiveSession } from '../../api/client'
+import { sendChat, streamChat, getHistory, deleteSession, listSessions, archiveSession, uploadChatFile } from '../../api/client'
 import type { ChatMessage, AuthHeaders, SessionSummary } from '../../api/client'
 
 interface Session {
@@ -34,6 +34,8 @@ export default function ChatPanel() {
   const abortRef = useRef<boolean>(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
 
   const active = sessions.find(s => s.id === activeId)!
   const containerRef = useRef<HTMLDivElement>(null)
@@ -229,6 +231,46 @@ export default function ChatPanel() {
     }
   }
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = '' // reset so same file can be re-uploaded
+
+    setError(null)
+    setUploading(true)
+
+    // Show user message about the upload
+    const userMsg = input.trim() || `Uploaded: ${file.name}`
+    const userChatMsg: ChatMessage = { role: 'user', content: `📎 ${userMsg}` }
+    updateSession(activeId, s => ({
+      ...s,
+      title: s.messages.length === 0 ? file.name.slice(0, 36) : s.title,
+      messages: [...s.messages, userChatMsg],
+    }))
+    setInput('')
+
+    try {
+      const result = await uploadChatFile(file, activeId, input.trim(), settings, authHeaders)
+      const assistantMsg: ChatMessage = { role: 'assistant', content: result.content }
+      updateSession(activeId, s => ({
+        ...s,
+        id: result.session_id !== activeId ? result.session_id : s.id,
+        messages: [...s.messages, assistantMsg],
+      }))
+      if (result.session_id !== activeId) {
+        setSessions(prev => prev.map(s =>
+          s.id === activeId ? { ...s, id: result.session_id } : s
+        ))
+        setActiveId(result.session_id)
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Upload failed'
+      setError(msg)
+    } finally {
+      setUploading(false)
+    }
+  }
+
   return (
     <div
       ref={containerRef}
@@ -363,12 +405,28 @@ export default function ChatPanel() {
             >
               <BookOpen size={18} />
             </button>
+            {/* File upload */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.txt,.md,.docx"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || loading}
+              className="flex-shrink-0 p-2 rounded-lg transition-colors text-gray-400 hover:text-gray-200 hover:bg-surface-700 disabled:opacity-40"
+              title="Upload file (PDF, TXT, MD, DOCX)"
+            >
+              <Paperclip size={18} />
+            </button>
             <textarea
               ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder={useKnowledge ? 'Message Bob (knowledge base active)…' : 'Message Bob…'}
+              placeholder={uploading ? 'Uploading file…' : useKnowledge ? 'Message Bob (knowledge base active)…' : 'Message Bob…'}
               rows={1}
               className="input flex-1 resize-none leading-relaxed"
               style={{ minHeight: '40px' }}

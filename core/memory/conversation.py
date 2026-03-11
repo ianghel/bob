@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -158,6 +158,81 @@ class ConversationMemory:
         stmt = stmt.order_by(Conversation.updated_at.desc())
         result = await db.execute(stmt)
         return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    # Session expiration & turn limits
+    # ------------------------------------------------------------------
+
+    async def check_session_expired(
+        self,
+        conversation: Conversation,
+        db: AsyncSession,
+    ) -> bool:
+        """Check if a session has expired due to inactivity.
+
+        If ``updated_at`` is older than ``SESSION_EXPIRY_HOURS`` the
+        conversation is marked ``is_expired = True`` and ``True`` is returned.
+        """
+        from core.config import get_settings
+
+        settings = get_settings()
+
+        if conversation.is_expired:
+            return True
+
+        expiry_threshold = datetime.now(timezone.utc) - timedelta(
+            hours=settings.session_expiry_hours,
+        )
+        # updated_at may be tz-naive from MySQL — normalise
+        updated = conversation.updated_at.replace(tzinfo=timezone.utc)
+        if updated < expiry_threshold:
+            conversation.is_expired = True
+            await db.flush()
+            return True
+
+        return False
+
+    @staticmethod
+    def check_turn_limit(conversation: Conversation) -> bool:
+        """Return ``True`` if the conversation has reached the max turn limit."""
+        from core.config import get_settings
+
+        settings = get_settings()
+        return len(conversation.turns) >= settings.max_turns_per_session
+
+    async def expire_stale_sessions(
+        self,
+        db: AsyncSession,
+        tenant_id: str,
+    ) -> int:
+        """Batch-mark all inactive sessions as expired.
+
+        Returns the number of newly-expired sessions.
+        """
+        from core.config import get_settings
+
+        settings = get_settings()
+        expiry_threshold = datetime.now(timezone.utc) - timedelta(
+            hours=settings.session_expiry_hours,
+        )
+
+        stmt = (
+            select(Conversation)
+            .where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.is_expired.is_(False),
+                Conversation.updated_at < expiry_threshold,
+            )
+        )
+        result = await db.execute(stmt)
+        stale = list(result.scalars().all())
+
+        for conv in stale:
+            conv.is_expired = True
+
+        await db.flush()
+        logger.info("Marked %d sessions as expired (tenant=%s)", len(stale), tenant_id)
+        return len(stale)
 
 
 def conversation_to_text(conversation: Conversation) -> str:

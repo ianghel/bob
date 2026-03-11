@@ -17,14 +17,17 @@ from api.dependencies import (
     LLMDep,
     RetrieverDep,
 )
+from core.config import get_settings
 from core.llm.base import Message, MessageRole
-from core.memory.conversation import ConversationMemory, conversation_to_text, turns_to_messages
+from core.memory.context_manager import ContextManager
+from core.memory.conversation import ConversationMemory, conversation_to_text
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 _memory = ConversationMemory()
+_context_manager = ContextManager()
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +70,7 @@ class SessionSummary(BaseModel):
     title: Optional[str] = None
     created_at: str
     updated_at: str
+    is_expired: bool = False
 
 
 class SessionListResponse(BaseModel):
@@ -86,6 +90,11 @@ class ArchiveResponse(BaseModel):
     session_id: str
     document_id: str
     chunks: int
+    message: str
+
+
+class CleanupResponse(BaseModel):
+    expired_count: int
     message: str
 
 
@@ -117,7 +126,23 @@ async def chat(
     )
     session_id = session.id
 
-    from core.config import get_settings
+    # --- Session guards: expiration & turn limit --------------------------
+    if await _memory.check_session_expired(session, db):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session has expired due to inactivity. Please start a new session.",
+        )
+    if _memory.check_turn_limit(session):
+        _settings = get_settings()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Session has reached the maximum of "
+                f"{_settings.max_turns_per_session} turns. "
+                f"Please start a new session."
+            ),
+        )
+
     _settings = get_settings()
     system_prompt = request.system_prompt or _settings.system_prompt
 
@@ -146,9 +171,15 @@ async def chat(
         except Exception as e:
             logger.warning("RAG lookup failed, continuing without context: %s", e)
 
-    # Build full message history for the LLM
-    messages = turns_to_messages(session.turns, system_prompt=system_prompt)
-    messages.append(Message(role=MessageRole.USER, content=request.message))
+    # Build token-budget-aware message history for the LLM
+    messages = await _context_manager.prepare_messages(
+        turns=session.turns,
+        current_user_message=request.message,
+        system_prompt=system_prompt,
+        llm=llm,
+        db=db,
+        conversation=session,
+    )
 
     if request.stream:
         return StreamingResponse(
@@ -265,10 +296,30 @@ async def list_sessions(
                 title=c.title,
                 created_at=c.created_at.isoformat() if c.created_at else "",
                 updated_at=c.updated_at.isoformat() if c.updated_at else "",
+                is_expired=c.is_expired,
             )
             for c in page
         ],
         total=len(conversations),
+    )
+
+
+@router.post(
+    "/cleanup-expired",
+    response_model=CleanupResponse,
+    summary="Mark expired sessions",
+)
+async def cleanup_expired_sessions(
+    db: DBSessionDep,
+    user: CurrentUserDep,
+    tenant: CurrentTenantDep,
+) -> CleanupResponse:
+    """Batch-mark all sessions inactive longer than the configured expiry period."""
+    count = await _memory.expire_stale_sessions(db=db, tenant_id=tenant.id)
+    await db.commit()
+    return CleanupResponse(
+        expired_count=count,
+        message=f"Marked {count} session(s) as expired.",
     )
 
 

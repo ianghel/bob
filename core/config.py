@@ -78,6 +78,19 @@ class Settings(BaseSettings):
     # -- Rate Limiting --------------------------------------------------------
     rate_limit: str = "60/minute"
 
+    # -- Context Window / Memory Management -----------------------------------
+    context_max_tokens: int = 48000
+    context_sliding_window_turns: int = 10
+    context_summary_enabled: bool = True
+
+    # -- Session Limits -------------------------------------------------------
+    max_turns_per_session: int = 100
+    session_expiry_hours: int = 24
+
+    # -- JWT Auto-Refresh -----------------------------------------------------
+    jwt_auto_refresh: bool = True
+    jwt_refresh_threshold_percent: int = 25
+
     # -- Computed properties --------------------------------------------------
 
     @property

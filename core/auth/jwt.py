@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import jwt
 
@@ -19,6 +20,46 @@ def create_access_token(user_id: str, tenant_id: str) -> str:
         "iat": datetime.now(timezone.utc),
     }
     return jwt.encode(payload, _SECRET, algorithm=_ALGORITHM)
+
+
+def maybe_refresh_token(token: str) -> Optional[str]:
+    """Return a fresh token if the current one is in its refresh window.
+
+    The refresh window is the last *N %* of the token's total lifetime
+    (configured via ``JWT_REFRESH_THRESHOLD_PERCENT``).  If the token is
+    still young enough, ``None`` is returned.
+    """
+    from core.config import get_settings
+
+    settings = get_settings()
+    if not settings.jwt_auto_refresh:
+        return None
+
+    try:
+        payload = jwt.decode(token, _SECRET, algorithms=[_ALGORITHM])
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return None
+
+    exp = payload.get("exp")
+    iat = payload.get("iat")
+    if not exp or not iat:
+        return None
+
+    exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
+    iat_dt = datetime.fromtimestamp(iat, tz=timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    total_lifetime = (exp_dt - iat_dt).total_seconds()
+    remaining = (exp_dt - now).total_seconds()
+
+    threshold = settings.jwt_refresh_threshold_percent / 100.0
+    if remaining <= total_lifetime * threshold:
+        user_id = payload.get("sub")
+        tenant_id = payload.get("tenant_id")
+        if user_id and tenant_id:
+            return create_access_token(user_id=user_id, tenant_id=tenant_id)
+
+    return None
 
 
 def decode_token(token: str) -> dict:

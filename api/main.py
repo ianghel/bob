@@ -98,6 +98,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Tenant-ID"],
+    expose_headers=["X-New-Token", "X-Request-ID", "X-Process-Time-Ms", "X-Session-ID"],
 )
 
 
@@ -133,6 +134,20 @@ async def logging_middleware(request: Request, call_next) -> Response:
 
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time-Ms"] = f"{duration_ms:.1f}"
+
+    # JWT auto-refresh: issue a new token when the current one is close to expiry
+    if response.status_code < 400:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            raw_token = auth_header[7:]
+            # Only attempt refresh for JWT tokens, not API tokens (bob_*)
+            if not raw_token.startswith("bob_"):
+                from core.auth.jwt import maybe_refresh_token
+
+                new_token = maybe_refresh_token(raw_token)
+                if new_token:
+                    response.headers["X-New-Token"] = new_token
+
     return response
 
 

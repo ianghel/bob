@@ -78,6 +78,8 @@ class Conversation(Base):
     tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=True)
+    is_expired = Column(Boolean, default=False, nullable=False)
+    summary = Column(Text, nullable=True)
     metadata_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)

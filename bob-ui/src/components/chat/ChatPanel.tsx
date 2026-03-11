@@ -251,7 +251,8 @@ export default function ChatPanel() {
 
     try {
       const result = await uploadChatFile(file, activeId, input.trim(), settings, authHeaders)
-      const assistantMsg: ChatMessage = { role: 'assistant', content: result.content }
+      const savedNote = `> **${result.filename}** saved to Bob's memory (${result.chunks} chunks)\n\n`
+      const assistantMsg: ChatMessage = { role: 'assistant', content: savedNote + result.content }
       updateSession(activeId, s => ({
         ...s,
         id: result.session_id !== activeId ? result.session_id : s.id,
@@ -417,7 +418,7 @@ export default function ChatPanel() {
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading || loading}
               className="flex-shrink-0 p-2 rounded-lg transition-colors text-gray-400 hover:text-gray-200 hover:bg-surface-700 disabled:opacity-40"
-              title="Upload file (PDF, TXT, MD, DOCX)"
+              title="Upload file to Bob's memory (PDF, TXT, MD, DOCX)"
             >
               <Paperclip size={18} />
             </button>

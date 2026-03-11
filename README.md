@@ -5,6 +5,9 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 ## Features
 
 - **Conversational AI** with persistent session memory and SSE streaming
+- **Web Search** — Bob searches the internet (DuckDuckGo) for up-to-date info, compares prices, and recommends products
+- **File Upload in Chat** — upload PDF, TXT, MD, DOCX files directly from chat; files are auto-ingested into Bob's memory (knowledge base) and Bob summarizes the content
+- **URL Fetching** — Bob can fetch and analyze web pages, saving them to his memory
 - **RAG** pipeline with ChromaDB vector store for document-grounded answers
 - **Agentic tool use** via Strands Agents (calculator, time, RAG lookup, summarize)
 - **Multi-tenant auth** with JWT login, user registration, admin approval, and API tokens
@@ -21,7 +24,7 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 │                     FastAPI  (api/)                           │
 │                                                              │
 │  /api/v1/auth    ──► JWT login / register / approval         │
-│  /api/v1/chat    ──► ConversationMemory ──► LLM Provider     │
+│  /api/v1/chat    ──► ConversationMemory ──► LLM + Web Tools   │
 │  /api/v1/rag     ──► ChromaDB ──────────► LLM Provider       │
 │  /api/v1/agent   ──► Strands Agent ─────► LLM Provider       │
 │  /api/v1/tokens  ──► API token management                    │
@@ -190,6 +193,18 @@ curl http://localhost:8000/api/v1/chat/sessions \
 # Get conversation history
 curl http://localhost:8000/api/v1/chat/<session_id>/history \
   -H "Authorization: Bearer <token>"
+
+# Upload a file to chat (auto-saved to Bob's memory)
+curl -X POST http://localhost:8000/api/v1/chat/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@document.pdf" \
+  -F "message=What's in this file?"
+
+# Fetch a URL into the knowledge base
+curl -X POST http://localhost:8000/api/v1/chat/fetch-url \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"url": "https://example.com/article"}'
 ```
 
 ### RAG (Knowledge Base)
@@ -327,8 +342,10 @@ bob/
 │   │   ├── base.py           # Abstract BaseLLMProvider
 │   │   ├── bedrock.py        # Amazon Bedrock provider (boto3)
 │   │   └── local.py          # OpenAI-compatible provider
+│   ├── chat/
+│   │   └── web_tools.py      # Web search, product search, URL fetch tools
 │   ├── memory/
-│   │   └── conversation.py   # In-memory session store
+│   │   └── conversation.py   # DB-backed session store
 │   ├── rag/
 │   │   ├── ingestion.py      # Document ingestion pipeline
 │   │   ├── retriever.py      # ChromaDB wrapper
@@ -372,6 +389,8 @@ bob/
 | **Strands Agents** | Agent orchestration and tool use |
 | **LangChain** | Document loading, splitting, embeddings |
 | **ChromaDB** | Local vector store |
+| **DuckDuckGo Search** | Web search and product comparison |
+| **BeautifulSoup** | Web page content extraction |
 | **Amazon Bedrock** | Managed LLM inference (Claude, Titan) |
 | **openai SDK** | OpenAI-compatible client for local models |
 | **React + Vite** | Frontend SPA |

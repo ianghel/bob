@@ -1,12 +1,14 @@
 """Web search and fetch tools for chat-mode tool calling.
 
 Uses Serper.dev (Google Search API) for high-quality search results.
+All returned URLs are validated with HEAD requests to ensure they're live.
 Tools are exposed as OpenAI function-calling schemas so the LLM can decide
 when to invoke them.
 """
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import httpx
@@ -18,8 +20,65 @@ logger = logging.getLogger(__name__)
 
 _SERPER_URL = "https://google.serper.dev/search"
 
+_HEAD_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
 # ---------------------------------------------------------------------------
-# Tool implementations
+# URL validation
+# ---------------------------------------------------------------------------
+
+
+def _is_url_alive(url: str) -> bool:
+    """Return True if a HEAD (or GET fallback) request returns 2xx/3xx."""
+    if not url:
+        return False
+    try:
+        with httpx.Client(
+            timeout=6, follow_redirects=True, headers=_HEAD_HEADERS
+        ) as client:
+            # Try HEAD first (fast, no body downloaded)
+            resp = client.head(url)
+            if resp.status_code < 400:
+                return True
+            # Some sites block HEAD — fall back to GET with stream
+            resp = client.get(url, headers={"Range": "bytes=0-0"})
+            return resp.status_code < 400
+    except Exception:
+        return False
+
+
+def _validate_results(results: list[dict]) -> list[dict]:
+    """Validate URLs concurrently, return only results with live links."""
+    if not results:
+        return []
+
+    alive: dict[str, bool] = {}
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        future_to_url = {
+            pool.submit(_is_url_alive, r["href"]): r["href"] for r in results
+        }
+        for future in as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                alive[url] = future.result()
+            except Exception:
+                alive[url] = False
+
+    valid = [r for r in results if alive.get(r["href"], False)]
+    dead = [r["href"] for r in results if not alive.get(r["href"], False)]
+    if dead:
+        logger.info("Filtered %d dead URLs: %s", len(dead), dead)
+    return valid
+
+
+# ---------------------------------------------------------------------------
+# Serper search
 # ---------------------------------------------------------------------------
 
 
@@ -31,7 +90,10 @@ def _serper_search(
     if not api_key:
         raise RuntimeError("SERPER_API_KEY is not configured")
 
-    payload = {"q": query, "gl": gl, "hl": hl, "num": max_results}
+    # Fetch extra results so we still have enough after filtering dead links
+    fetch_count = max_results * 3
+
+    payload = {"q": query, "gl": gl, "hl": hl, "num": fetch_count}
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
 
     with httpx.Client(timeout=15) as client:
@@ -39,11 +101,10 @@ def _serper_search(
         resp.raise_for_status()
 
     data = resp.json()
-    results: list[dict] = []
+    candidates: list[dict] = []
 
-    # Serper returns organic results + optional shopping, knowledge graph, etc.
-    for item in data.get("organic", [])[:max_results]:
-        results.append(
+    for item in data.get("organic", []):
+        candidates.append(
             {
                 "title": item.get("title", ""),
                 "body": item.get("snippet", ""),
@@ -51,21 +112,23 @@ def _serper_search(
             }
         )
 
-    # Also include shopping results if available (great for product queries)
-    for item in data.get("shopping", [])[:3]:
+    # Include shopping results (great for product queries)
+    for item in data.get("shopping", []):
         title = item.get("title", "")
         price = item.get("price", "")
         source = item.get("source", "")
         link = item.get("link", "")
         body = f"{price} — {source}" if price else source
         if link and title:
-            results.append({"title": title, "body": body, "href": link})
+            candidates.append({"title": title, "body": body, "href": link})
 
-    return results[:max_results]
+    # Validate URLs and keep only live ones
+    valid = _validate_results(candidates)
+    return valid[:max_results]
 
 
 def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web using Google (via Serper) and return formatted results."""
+    """Search the web using Google (via Serper) and return validated results."""
     try:
         results = _serper_search(query, max_results)
         if not results:

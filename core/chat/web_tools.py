@@ -1,6 +1,6 @@
 """Web search and fetch tools for chat-mode tool calling.
 
-Provides Bing-based search (general + products) and webpage fetching.
+Uses Serper.dev (Google Search API) for high-quality search results.
 Tools are exposed as OpenAI function-calling schemas so the LLM can decide
 when to invoke them.
 """
@@ -8,54 +8,66 @@ when to invoke them.
 import json
 import logging
 from typing import Any
-from urllib.parse import quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
 
+from core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-_SEARCH_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9,ro;q=0.8",
-}
+_SERPER_URL = "https://google.serper.dev/search"
 
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
 
 
-def _bing_search(query: str, max_results: int = 5) -> list[dict]:
-    """Scrape Bing search results and return a list of {title, body, href}."""
-    url = f"https://www.bing.com/search?q={quote_plus(query)}&count={max_results}"
-    with httpx.Client(timeout=15, follow_redirects=True) as client:
-        resp = client.get(url, headers=_SEARCH_HEADERS)
+def _serper_search(
+    query: str, max_results: int = 5, gl: str = "ro", hl: str = "ro"
+) -> list[dict]:
+    """Search via Serper.dev and return a list of {title, body, href}."""
+    api_key = get_settings().serper_api_key
+    if not api_key:
+        raise RuntimeError("SERPER_API_KEY is not configured")
+
+    payload = {"q": query, "gl": gl, "hl": hl, "num": max_results}
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+
+    with httpx.Client(timeout=15) as client:
+        resp = client.post(_SERPER_URL, json=payload, headers=headers)
         resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
-    results = []
-    for li in soup.select("li.b_algo"):
-        a_tag = li.select_one("h2 a")
-        if not a_tag:
-            continue
-        title = a_tag.get_text(strip=True)
-        href = a_tag.get("href", "")
-        snippet_tag = li.select_one("p") or li.select_one(".b_caption p")
-        body = snippet_tag.get_text(strip=True) if snippet_tag else ""
-        results.append({"title": title, "body": body, "href": href})
-        if len(results) >= max_results:
-            break
-    return results
+
+    data = resp.json()
+    results: list[dict] = []
+
+    # Serper returns organic results + optional shopping, knowledge graph, etc.
+    for item in data.get("organic", [])[:max_results]:
+        results.append(
+            {
+                "title": item.get("title", ""),
+                "body": item.get("snippet", ""),
+                "href": item.get("link", ""),
+            }
+        )
+
+    # Also include shopping results if available (great for product queries)
+    for item in data.get("shopping", [])[:3]:
+        title = item.get("title", "")
+        price = item.get("price", "")
+        source = item.get("source", "")
+        link = item.get("link", "")
+        body = f"{price} — {source}" if price else source
+        if link and title:
+            results.append({"title": title, "body": body, "href": link})
+
+    return results[:max_results]
 
 
 def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web using Bing and return formatted results."""
+    """Search the web using Google (via Serper) and return formatted results."""
     try:
-        results = _bing_search(query, max_results)
+        results = _serper_search(query, max_results)
         if not results:
             return f"No results found for: {query}"
         parts = []
@@ -70,10 +82,10 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 
 def search_products(query: str, max_results: int = 5) -> str:
-    """Search for products with price-oriented results via Bing."""
-    enriched_query = f"{query} preț cumpără magazin"
+    """Search for products with price-oriented results via Google (Serper)."""
+    enriched_query = f"{query} preț cumpără"
     try:
-        results = _bing_search(enriched_query, max_results)
+        results = _serper_search(enriched_query, max_results)
         if not results:
             return f"No product results found for: {query}"
         parts = []
@@ -121,7 +133,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "web_search",
             "description": (
-                "Search the internet for information using Bing. "
+                "Search the internet for information using Google. "
                 "Use this for general questions, news, facts, tutorials, etc."
             ),
             "parameters": {

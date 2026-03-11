@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     # -- Web Search -----------------------------------------------------------
     web_search_enabled: bool = True
     web_search_max_results: int = 5
+    serper_api_key: str = ""
 
     # -- Agent ----------------------------------------------------------------
     agent_timeout_seconds: int = 120

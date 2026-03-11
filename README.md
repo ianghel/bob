@@ -5,7 +5,7 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 ## Features
 
 - **Conversational AI** with persistent session memory and SSE streaming
-- **Web Search** — Bob searches the internet (Bing) for up-to-date info, compares prices, and recommends products
+- **Web Search** — Bob searches the internet (Google via Serper.dev) for up-to-date info, compares prices, and recommends products
 - **File Upload in Chat** — upload PDF, TXT, MD, DOCX files directly from chat; files are auto-ingested into Bob's memory (knowledge base) and Bob summarizes the content
 - **URL Fetching** — Bob can fetch and analyze web pages, saving them to his memory
 - **RAG** pipeline with ChromaDB vector store for document-grounded answers
@@ -106,6 +106,7 @@ Key settings in `.env`:
 | `API_KEY` | Static API key for backward-compatible endpoints |
 | `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` | Database connection |
 | `JWT_SECRET` | Secret for signing JWT tokens (change in production!) |
+| `SERPER_API_KEY` | API key from [serper.dev](https://serper.dev) for Google search |
 | `MAIL_*` | SMTP settings for user approval emails |
 
 ### 6. Start a model server
@@ -389,7 +390,7 @@ bob/
 | **Strands Agents** | Agent orchestration and tool use |
 | **LangChain** | Document loading, splitting, embeddings |
 | **ChromaDB** | Local vector store |
-| **Bing Search** | Web search and product comparison |
+| **Serper.dev** | Google Search API for web and product search |
 | **BeautifulSoup** | Web page content extraction |
 | **Amazon Bedrock** | Managed LLM inference (Claude, Titan) |
 | **openai SDK** | OpenAI-compatible client for local models |

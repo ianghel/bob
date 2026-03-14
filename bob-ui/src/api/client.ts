@@ -369,11 +369,12 @@ export async function speakText(
   settings: Settings,
   auth: AuthHeaders,
   voice?: string,
+  lang?: string,
 ): Promise<Blob> {
   const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/speak`, {
     method: 'POST',
     headers: authHeaders(auth),
-    body: JSON.stringify({ text, voice }),
+    body: JSON.stringify({ text, voice, lang }),
     timeoutMs: 60_000,
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)

@@ -60,39 +60,47 @@ export default function ChatPanel() {
     localStorage.setItem('bob-speech-lang', next.code)
   }
 
-  // TTS voice selection (server-side Kokoro voices)
-  const KOKORO_VOICES = [
-    // American English — Female
-    { id: 'af_heart', name: 'Heart', lang: 'EN-US', gender: 'F' },
-    { id: 'af_alloy', name: 'Alloy', lang: 'EN-US', gender: 'F' },
-    { id: 'af_aoede', name: 'Aoede', lang: 'EN-US', gender: 'F' },
-    { id: 'af_bella', name: 'Bella', lang: 'EN-US', gender: 'F' },
-    { id: 'af_jessica', name: 'Jessica', lang: 'EN-US', gender: 'F' },
-    { id: 'af_kore', name: 'Kore', lang: 'EN-US', gender: 'F' },
-    { id: 'af_nicole', name: 'Nicole', lang: 'EN-US', gender: 'F' },
-    { id: 'af_nova', name: 'Nova', lang: 'EN-US', gender: 'F' },
-    { id: 'af_river', name: 'River', lang: 'EN-US', gender: 'F' },
-    { id: 'af_sarah', name: 'Sarah', lang: 'EN-US', gender: 'F' },
-    { id: 'af_sky', name: 'Sky', lang: 'EN-US', gender: 'F' },
-    // American English — Male
-    { id: 'am_adam', name: 'Adam', lang: 'EN-US', gender: 'M' },
-    { id: 'am_echo', name: 'Echo', lang: 'EN-US', gender: 'M' },
-    { id: 'am_eric', name: 'Eric', lang: 'EN-US', gender: 'M' },
-    { id: 'am_fenrir', name: 'Fenrir', lang: 'EN-US', gender: 'M' },
-    { id: 'am_liam', name: 'Liam', lang: 'EN-US', gender: 'M' },
-    { id: 'am_michael', name: 'Michael', lang: 'EN-US', gender: 'M' },
-    { id: 'am_onyx', name: 'Onyx', lang: 'EN-US', gender: 'M' },
-    { id: 'am_puck', name: 'Puck', lang: 'EN-US', gender: 'M' },
-    // British English — Female
-    { id: 'bf_alice', name: 'Alice', lang: 'EN-GB', gender: 'F' },
-    { id: 'bf_emma', name: 'Emma', lang: 'EN-GB', gender: 'F' },
-    { id: 'bf_lily', name: 'Lily', lang: 'EN-GB', gender: 'F' },
-    // British English — Male
-    { id: 'bm_daniel', name: 'Daniel', lang: 'EN-GB', gender: 'M' },
-    { id: 'bm_fable', name: 'Fable', lang: 'EN-GB', gender: 'M' },
-    { id: 'bm_george', name: 'George', lang: 'EN-GB', gender: 'M' },
-    { id: 'bm_lewis', name: 'Lewis', lang: 'EN-GB', gender: 'M' },
+  // TTS voice selection
+  const TTS_VOICES = [
+    // Romanian — Piper (native)
+    { id: 'ro_RO-mihai-medium', name: 'Mihai', lang: 'RO', gender: 'M', provider: 'piper' },
+    // American English — Female (Kokoro)
+    { id: 'af_heart', name: 'Heart', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_alloy', name: 'Alloy', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_aoede', name: 'Aoede', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_bella', name: 'Bella', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_jessica', name: 'Jessica', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_kore', name: 'Kore', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_nicole', name: 'Nicole', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_nova', name: 'Nova', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_river', name: 'River', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_sarah', name: 'Sarah', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    { id: 'af_sky', name: 'Sky', lang: 'EN-US', gender: 'F', provider: 'kokoro' },
+    // American English — Male (Kokoro)
+    { id: 'am_adam', name: 'Adam', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    { id: 'am_echo', name: 'Echo', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    { id: 'am_eric', name: 'Eric', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    { id: 'am_fenrir', name: 'Fenrir', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    { id: 'am_liam', name: 'Liam', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    { id: 'am_michael', name: 'Michael', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    { id: 'am_onyx', name: 'Onyx', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    { id: 'am_puck', name: 'Puck', lang: 'EN-US', gender: 'M', provider: 'kokoro' },
+    // British English — Female (Kokoro)
+    { id: 'bf_alice', name: 'Alice', lang: 'EN-GB', gender: 'F', provider: 'kokoro' },
+    { id: 'bf_emma', name: 'Emma', lang: 'EN-GB', gender: 'F', provider: 'kokoro' },
+    { id: 'bf_lily', name: 'Lily', lang: 'EN-GB', gender: 'F', provider: 'kokoro' },
+    // British English — Male (Kokoro)
+    { id: 'bm_daniel', name: 'Daniel', lang: 'EN-GB', gender: 'M', provider: 'kokoro' },
+    { id: 'bm_fable', name: 'Fable', lang: 'EN-GB', gender: 'M', provider: 'kokoro' },
+    { id: 'bm_george', name: 'George', lang: 'EN-GB', gender: 'M', provider: 'kokoro' },
+    { id: 'bm_lewis', name: 'Lewis', lang: 'EN-GB', gender: 'M', provider: 'kokoro' },
   ]
+
+  // Detect Romanian text (simple heuristic)
+  const detectRomanian = (text: string): boolean => {
+    const roWords = /\b(sunt|este|care|pentru|acest|această|foarte|poate|avea|face|bună|ziua|cum|pot|ajuta|astăzi|mulțumesc|vă|rog|despre|lucru|trebuie|acesta|aceasta|doar|dacă|când|unde|cine|cele|mai|fost|avea|după|prin|peste|între|fără|către|noi|lor|sau)\b/i
+    return roWords.test(text)
+  }
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
     () => localStorage.getItem('bob-tts-voice') || 'af_heart'
   )
@@ -471,7 +479,7 @@ export default function ChatPanel() {
           )}
 
           {active.messages.map((msg, i) => (
-            <MessageBubble key={i} message={msg} voiceId={selectedVoiceId} settings={settings} auth={authHeaders} />
+            <MessageBubble key={i} message={msg} voiceId={selectedVoiceId} settings={settings} auth={authHeaders} detectRo={detectRomanian} voices={TTS_VOICES} />
           ))}
 
           {streaming && streamingContent && (
@@ -481,6 +489,8 @@ export default function ChatPanel() {
               voiceId={selectedVoiceId}
               settings={settings}
               auth={authHeaders}
+              detectRo={detectRomanian}
+              voices={TTS_VOICES}
             />
           )}
 
@@ -600,16 +610,16 @@ export default function ChatPanel() {
                     ? 'text-indigo-400 bg-indigo-600/20 border border-indigo-500/30'
                     : 'text-gray-400 hover:text-gray-200 hover:bg-surface-700',
                 )}
-                title={`TTS: ${KOKORO_VOICES.find(v => v.id === selectedVoiceId)?.name ?? 'Default'}`}
+                title={`TTS: ${TTS_VOICES.find(v => v.id === selectedVoiceId)?.name ?? 'Default'}`}
               >
                 <Volume2 size={16} />
               </button>
               {showVoiceMenu && (
                 <div className="absolute bottom-full left-0 mb-2 w-64 max-h-72 overflow-y-auto rounded-xl bg-surface-800 border border-surface-600 shadow-xl z-50">
                   <div className="p-2 border-b border-surface-700 text-xs text-gray-400 font-medium">
-                    Kokoro TTS Voice
+                    TTS Voice (RO = auto Piper)
                   </div>
-                  {KOKORO_VOICES.map(v => (
+                  {TTS_VOICES.map(v => (
                     <button
                       key={v.id}
                       onClick={() => setVoice(v.id)}
@@ -621,6 +631,7 @@ export default function ChatPanel() {
                       <span className="flex-1">{v.name}</span>
                       <span className="text-[10px] text-gray-500">{v.gender}</span>
                       <span className="text-[10px] text-gray-500">{v.lang}</span>
+                      {v.provider === 'piper' && <span className="text-[9px] text-green-500 font-medium">PIPER</span>}
                     </button>
                   ))}
                 </div>
@@ -640,12 +651,14 @@ export default function ChatPanel() {
   )
 }
 
-function MessageBubble({ message, streaming: isStreaming, voiceId, settings, auth }: {
+function MessageBubble({ message, streaming: isStreaming, voiceId, settings, auth, detectRo, voices }: {
   message: ChatMessage
   streaming?: boolean
   voiceId: string
   settings: Settings
   auth: AuthHeaders
+  detectRo?: (text: string) => boolean
+  voices?: { id: string; lang: string; provider: string }[]
 }) {
   const isUser = message.role === 'user'
   const [speaking, setSpeaking] = useState(false)
@@ -699,9 +712,19 @@ function MessageBubble({ message, streaming: isStreaming, voiceId, settings, aut
     cancelledRef.current = false
     setLoadingTTS(true)
 
+    // Detect language: if selected voice is Romanian, use 'ro'; if text looks Romanian, auto-switch to 'ro'
+    const selectedVoice = voices?.find(v => v.id === voiceId)
+    const isRo = selectedVoice?.lang === 'RO' || (detectRo?.(plainText) && (!selectedVoice || selectedVoice.provider === 'piper'))
+    const lang = isRo ? 'ro' : undefined
+    // If text is Romanian but selected voice is Kokoro, auto-switch to Piper voice
+    const effectiveVoice = (detectRo?.(plainText) && selectedVoice?.provider !== 'piper')
+      ? 'ro_RO-mihai-medium'
+      : voiceId
+    const effectiveLang = detectRo?.(plainText) ? 'ro' : lang
+
     try {
       // Fetch first chunk
-      let nextBlobPromise: Promise<Blob> | null = speakText(chunks[0], settings, auth, voiceId)
+      let nextBlobPromise: Promise<Blob> | null = speakText(chunks[0], settings, auth, effectiveVoice, effectiveLang)
 
       for (let i = 0; i < chunks.length; i++) {
         if (cancelledRef.current) break
@@ -712,7 +735,7 @@ function MessageBubble({ message, streaming: isStreaming, voiceId, settings, aut
 
         // Start pre-fetching next chunk immediately
         nextBlobPromise = (i + 1 < chunks.length)
-          ? speakText(chunks[i + 1], settings, auth, voiceId)
+          ? speakText(chunks[i + 1], settings, auth, effectiveVoice, effectiveLang)
           : null
 
         // First chunk ready → switch from loading to speaking

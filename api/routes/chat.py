@@ -555,6 +555,7 @@ class TranscribeResponse(BaseModel):
 class SpeakRequest(BaseModel):
     text: str = Field(..., max_length=4096, description="Text to synthesize")
     voice: str | None = Field(None, description="Voice name override")
+    lang: str | None = Field(None, description="Language hint — 'ro' routes to Piper, others to Kokoro")
 
 
 @router.post("/transcribe", response_model=TranscribeResponse, summary="Transcribe audio via Whisper")
@@ -607,47 +608,62 @@ async def transcribe_audio(
     return TranscribeResponse(text=result.get("text", ""))
 
 
-@router.post("/speak", summary="Text-to-speech via Kokoro TTS")
+@router.post("/speak", summary="Text-to-speech via Kokoro/Piper TTS")
 async def speak_text(
     body: SpeakRequest,
     user: CurrentUserDep,
     tenant: CurrentTenantDep,
 ):
-    """Convert text to speech audio (MP3). Returns audio/mpeg stream."""
+    """Convert text to speech audio (MP3). Routes to Piper for Romanian, Kokoro for everything else."""
     _settings = get_settings()
-    if not _settings.tts_base_url:
+
+    # Route: Romanian → Piper (native RO voice), everything else → Kokoro
+    use_piper = body.lang == "ro" and _settings.piper_base_url
+
+    if use_piper:
+        base_url = _settings.piper_base_url
+        api_key = _settings.piper_api_key
+        voice = body.voice if body.voice and body.voice.startswith("ro") else _settings.piper_voice
+        model = _settings.piper_model
+    else:
+        base_url = _settings.tts_base_url
+        api_key = _settings.tts_api_key
+        voice = body.voice or _settings.tts_voice
+        model = _settings.tts_model
+
+    if not base_url:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="TTS service not configured",
         )
 
-    voice = body.voice or _settings.tts_voice
     payload = {
-        "model": _settings.tts_model,
+        "model": model,
         "input": body.text,
         "voice": voice,
         "response_format": "mp3",
     }
 
+    provider = "Piper" if use_piper else "Kokoro"
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                f"{_settings.tts_base_url}/audio/speech",
+                f"{base_url}/audio/speech",
                 headers={
-                    "Authorization": f"Bearer {_settings.tts_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json=payload,
             )
             resp.raise_for_status()
     except httpx.HTTPStatusError as e:
-        logger.error("TTS API error: %s — %s", e.response.status_code, e.response.text)
+        logger.error("%s TTS API error: %s — %s", provider, e.response.status_code, e.response.text)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"TTS synthesis failed: {e.response.text}",
+            detail=f"{provider} TTS synthesis failed: {e.response.text}",
         )
     except Exception as e:
-        logger.error("TTS API connection error: %s", e)
+        logger.error("%s TTS API connection error: %s", provider, e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Could not reach TTS service: {e}",

@@ -249,6 +249,10 @@ TTS_BASE_URL=${TTS_BASE_URL:-}
 TTS_API_KEY=${TTS_API_KEY:-}
 TTS_MODEL=${TTS_MODEL:-kokoro}
 TTS_VOICE=${TTS_VOICE:-af_heart}
+PIPER_BASE_URL=${PIPER_BASE_URL:-}
+PIPER_API_KEY=${PIPER_API_KEY:-}
+PIPER_MODEL=${PIPER_MODEL:-piper}
+PIPER_VOICE=${PIPER_VOICE:-ro_RO-mihai-medium}
 JWT_AUTO_REFRESH=true
 JWT_REFRESH_THRESHOLD_PERCENT=25
 SYSTEM_PROMPT=You are Bob, a helpful AI assistant.
@@ -278,6 +282,16 @@ else
         echo "TTS_MODEL=${TTS_MODEL:-kokoro}" >> .env
         echo "TTS_VOICE=${TTS_VOICE:-af_heart}" >> .env
         echo "Added TTS config to .env"
+    fi
+    # Append Piper config if missing
+    if ! grep -q 'PIPER_BASE_URL' .env; then
+        echo "" >> .env
+        echo "# Piper TTS (Romanian)" >> .env
+        echo "PIPER_BASE_URL=${PIPER_BASE_URL:-}" >> .env
+        echo "PIPER_API_KEY=${PIPER_API_KEY:-}" >> .env
+        echo "PIPER_MODEL=${PIPER_MODEL:-piper}" >> .env
+        echo "PIPER_VOICE=${PIPER_VOICE:-ro_RO-mihai-medium}" >> .env
+        echo "Added Piper config to .env"
     fi
 fi
 

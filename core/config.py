@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     tts_model: str = "kokoro"
     tts_voice: str = "af_heart"
 
+    # -- Piper TTS (Romanian / secondary TTS) ---------------------------------
+    piper_base_url: str = ""
+    piper_api_key: str = ""
+    piper_model: str = "piper"
+    piper_voice: str = "ro_RO-mihai-medium"
+
     # -- Agent ----------------------------------------------------------------
     agent_timeout_seconds: int = 120
 

@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Plus, Trash2, ChevronRight, Send, Square, PanelLeft, X, BookOpen, Archive, Paperclip, Mic, MicOff, Volume2, VolumeX, Settings2 } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, Send, Square, PanelLeft, X, BookOpen, Archive, Paperclip, Mic, MicOff, Volume2, VolumeX } from 'lucide-react'
 import { clsx } from 'clsx'
 import ReactMarkdown from 'react-markdown'
 import { useSettings } from '../../store/settings'
 import { useAuth } from '../../store/auth'
-import { sendChat, streamChat, getHistory, deleteSession, listSessions, archiveSession, uploadChatFile, transcribeAudio } from '../../api/client'
-import type { ChatMessage, AuthHeaders, SessionSummary } from '../../api/client'
+import { sendChat, streamChat, getHistory, deleteSession, listSessions, archiveSession, uploadChatFile, transcribeAudio, speakText } from '../../api/client'
+import type { ChatMessage, AuthHeaders, SessionSummary, Settings } from '../../api/client'
 
 interface Session {
   id: string
@@ -41,31 +41,68 @@ export default function ChatPanel() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
 
-  // TTS voice selection
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
-  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>(
-    () => localStorage.getItem('bob-tts-voice') || ''
+  // Speech language (for Whisper STT)
+  const SPEECH_LANGS = [
+    { code: 'auto', label: 'Auto' },
+    { code: 'ro', label: '🇷🇴 RO' },
+    { code: 'en', label: '🇬🇧 EN' },
+    { code: 'de', label: '🇩🇪 DE' },
+    { code: 'fr', label: '🇫🇷 FR' },
+    { code: 'es', label: '🇪🇸 ES' },
+  ]
+  const [speechLang, setSpeechLang] = useState<string>(
+    () => localStorage.getItem('bob-speech-lang') || 'auto'
+  )
+  const changeSpeechLang = () => {
+    const idx = SPEECH_LANGS.findIndex(l => l.code === speechLang)
+    const next = SPEECH_LANGS[(idx + 1) % SPEECH_LANGS.length]
+    setSpeechLang(next.code)
+    localStorage.setItem('bob-speech-lang', next.code)
+  }
+
+  // TTS voice selection (server-side Kokoro voices)
+  const KOKORO_VOICES = [
+    // American English — Female
+    { id: 'af_heart', name: 'Heart', lang: 'EN-US', gender: 'F' },
+    { id: 'af_alloy', name: 'Alloy', lang: 'EN-US', gender: 'F' },
+    { id: 'af_aoede', name: 'Aoede', lang: 'EN-US', gender: 'F' },
+    { id: 'af_bella', name: 'Bella', lang: 'EN-US', gender: 'F' },
+    { id: 'af_jessica', name: 'Jessica', lang: 'EN-US', gender: 'F' },
+    { id: 'af_kore', name: 'Kore', lang: 'EN-US', gender: 'F' },
+    { id: 'af_nicole', name: 'Nicole', lang: 'EN-US', gender: 'F' },
+    { id: 'af_nova', name: 'Nova', lang: 'EN-US', gender: 'F' },
+    { id: 'af_river', name: 'River', lang: 'EN-US', gender: 'F' },
+    { id: 'af_sarah', name: 'Sarah', lang: 'EN-US', gender: 'F' },
+    { id: 'af_sky', name: 'Sky', lang: 'EN-US', gender: 'F' },
+    // American English — Male
+    { id: 'am_adam', name: 'Adam', lang: 'EN-US', gender: 'M' },
+    { id: 'am_echo', name: 'Echo', lang: 'EN-US', gender: 'M' },
+    { id: 'am_eric', name: 'Eric', lang: 'EN-US', gender: 'M' },
+    { id: 'am_fenrir', name: 'Fenrir', lang: 'EN-US', gender: 'M' },
+    { id: 'am_liam', name: 'Liam', lang: 'EN-US', gender: 'M' },
+    { id: 'am_michael', name: 'Michael', lang: 'EN-US', gender: 'M' },
+    { id: 'am_onyx', name: 'Onyx', lang: 'EN-US', gender: 'M' },
+    { id: 'am_puck', name: 'Puck', lang: 'EN-US', gender: 'M' },
+    // British English — Female
+    { id: 'bf_alice', name: 'Alice', lang: 'EN-GB', gender: 'F' },
+    { id: 'bf_emma', name: 'Emma', lang: 'EN-GB', gender: 'F' },
+    { id: 'bf_lily', name: 'Lily', lang: 'EN-GB', gender: 'F' },
+    // British English — Male
+    { id: 'bm_daniel', name: 'Daniel', lang: 'EN-GB', gender: 'M' },
+    { id: 'bm_fable', name: 'Fable', lang: 'EN-GB', gender: 'M' },
+    { id: 'bm_george', name: 'George', lang: 'EN-GB', gender: 'M' },
+    { id: 'bm_lewis', name: 'Lewis', lang: 'EN-GB', gender: 'M' },
+  ]
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>(
+    () => localStorage.getItem('bob-tts-voice') || 'af_heart'
   )
   const [showVoiceMenu, setShowVoiceMenu] = useState(false)
 
-  // Load available voices
-  useEffect(() => {
-    const loadVoices = () => {
-      const v = window.speechSynthesis.getVoices()
-      if (v.length > 0) setVoices(v)
-    }
-    loadVoices()
-    window.speechSynthesis.addEventListener('voiceschanged', loadVoices)
-    return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices)
-  }, [])
-
-  const setVoice = (uri: string) => {
-    setSelectedVoiceURI(uri)
-    localStorage.setItem('bob-tts-voice', uri)
+  const setVoice = (id: string) => {
+    setSelectedVoiceId(id)
+    localStorage.setItem('bob-tts-voice', id)
     setShowVoiceMenu(false)
   }
-
-  const selectedVoice = voices.find(v => v.voiceURI === selectedVoiceURI) || null
 
   const active = sessions.find(s => s.id === activeId)!
   const containerRef = useRef<HTMLDivElement>(null)
@@ -330,7 +367,7 @@ export default function ChatPanel() {
 
         setTranscribing(true)
         try {
-          const text = await transcribeAudio(audioBlob, settings, authHeaders)
+          const text = await transcribeAudio(audioBlob, settings, authHeaders, speechLang)
           if (text.trim()) {
             setInput(text.trim())
             // Auto-focus textarea so user can review or send
@@ -434,14 +471,16 @@ export default function ChatPanel() {
           )}
 
           {active.messages.map((msg, i) => (
-            <MessageBubble key={i} message={msg} voice={selectedVoice} />
+            <MessageBubble key={i} message={msg} voiceId={selectedVoiceId} settings={settings} auth={authHeaders} />
           ))}
 
           {streaming && streamingContent && (
             <MessageBubble
               message={{ role: 'assistant', content: streamingContent }}
               streaming
-              voice={selectedVoice}
+              voiceId={selectedVoiceId}
+              settings={settings}
+              auth={authHeaders}
             />
           )}
 
@@ -543,50 +582,47 @@ export default function ChatPanel() {
             >
               {recording ? <MicOff size={16} /> : <Mic size={16} />}
             </button>
+            {/* Speech language toggle */}
+            <button
+              onClick={changeSpeechLang}
+              className="flex-shrink-0 px-1.5 py-1 rounded-lg transition-colors text-[10px] font-bold text-gray-400 hover:text-gray-200 hover:bg-surface-700 border border-surface-600 min-w-[40px]"
+              title={`Speech language: ${SPEECH_LANGS.find(l => l.code === speechLang)?.label ?? 'Auto'} — click to change`}
+            >
+              {SPEECH_LANGS.find(l => l.code === speechLang)?.label ?? 'Auto'}
+            </button>
             {/* TTS voice picker */}
             <div className="relative flex-shrink-0">
               <button
                 onClick={() => setShowVoiceMenu(v => !v)}
                 className={clsx(
                   'p-2 rounded-lg transition-colors',
-                  selectedVoice
+                  selectedVoiceId
                     ? 'text-indigo-400 bg-indigo-600/20 border border-indigo-500/30'
                     : 'text-gray-400 hover:text-gray-200 hover:bg-surface-700',
                 )}
-                title={selectedVoice ? `TTS: ${selectedVoice.name}` : 'Select TTS voice'}
+                title={`TTS: ${KOKORO_VOICES.find(v => v.id === selectedVoiceId)?.name ?? 'Default'}`}
               >
                 <Volume2 size={16} />
               </button>
               {showVoiceMenu && (
-                <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto rounded-xl bg-surface-800 border border-surface-600 shadow-xl z-50">
+                <div className="absolute bottom-full left-0 mb-2 w-64 max-h-72 overflow-y-auto rounded-xl bg-surface-800 border border-surface-600 shadow-xl z-50">
                   <div className="p-2 border-b border-surface-700 text-xs text-gray-400 font-medium">
-                    Select voice for TTS
+                    Kokoro TTS Voice
                   </div>
-                  <button
-                    onClick={() => setVoice('')}
-                    className={clsx(
-                      'w-full text-left px-3 py-2 text-xs hover:bg-surface-700 transition-colors',
-                      !selectedVoiceURI ? 'text-indigo-400 bg-surface-700/50' : 'text-gray-300',
-                    )}
-                  >
-                    Auto (browser default)
-                  </button>
-                  {voices.map(v => (
+                  {KOKORO_VOICES.map(v => (
                     <button
-                      key={v.voiceURI}
-                      onClick={() => setVoice(v.voiceURI)}
+                      key={v.id}
+                      onClick={() => setVoice(v.id)}
                       className={clsx(
                         'w-full text-left px-3 py-2 text-xs hover:bg-surface-700 transition-colors flex items-center gap-2',
-                        selectedVoiceURI === v.voiceURI ? 'text-indigo-400 bg-surface-700/50' : 'text-gray-300',
+                        selectedVoiceId === v.id ? 'text-indigo-400 bg-surface-700/50' : 'text-gray-300',
                       )}
                     >
-                      <span className="flex-1 truncate">{v.name}</span>
-                      <span className="text-[10px] text-gray-500 flex-shrink-0">{v.lang}</span>
+                      <span className="flex-1">{v.name}</span>
+                      <span className="text-[10px] text-gray-500">{v.gender}</span>
+                      <span className="text-[10px] text-gray-500">{v.lang}</span>
                     </button>
                   ))}
-                  {voices.length === 0 && (
-                    <p className="px-3 py-2 text-xs text-gray-500">No voices available</p>
-                  )}
                 </div>
               )}
             </div>
@@ -604,14 +640,47 @@ export default function ChatPanel() {
   )
 }
 
-function MessageBubble({ message, streaming, voice }: { message: ChatMessage; streaming?: boolean; voice?: SpeechSynthesisVoice | null }) {
+function MessageBubble({ message, streaming: isStreaming, voiceId, settings, auth }: {
+  message: ChatMessage
+  streaming?: boolean
+  voiceId: string
+  settings: Settings
+  auth: AuthHeaders
+}) {
   const isUser = message.role === 'user'
   const [speaking, setSpeaking] = useState(false)
+  const [loadingTTS, setLoadingTTS] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const cancelledRef = useRef(false)
 
-  const toggleSpeak = () => {
-    if (speaking) {
-      window.speechSynthesis.cancel()
+  // Split text into chunks at sentence boundaries, max ~500 chars each
+  const splitIntoChunks = (text: string): string[] => {
+    const MAX = 500
+    const chunks: string[] = []
+    // Split on sentence endings followed by space
+    const sentences = text.split(/(?<=[.!?])\s+/)
+    let current = ''
+    for (const s of sentences) {
+      if (current && (current.length + s.length + 1) > MAX) {
+        chunks.push(current.trim())
+        current = s
+      } else {
+        current = current ? current + ' ' + s : s
+      }
+    }
+    if (current.trim()) chunks.push(current.trim())
+    return chunks.length > 0 ? chunks : [text]
+  }
+
+  const toggleSpeak = async () => {
+    if (speaking || loadingTTS) {
+      cancelledRef.current = true
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.currentTime = 0
+      }
       setSpeaking(false)
+      setLoadingTTS(false)
       return
     }
 
@@ -626,34 +695,58 @@ function MessageBubble({ message, streaming, voice }: { message: ChatMessage; st
 
     if (!plainText) return
 
-    const utterance = new SpeechSynthesisUtterance(plainText)
-    utterance.rate = 1.0
-    utterance.pitch = 1.0
+    const chunks = splitIntoChunks(plainText)
+    cancelledRef.current = false
+    setLoadingTTS(true)
 
-    if (voice) {
-      utterance.voice = voice
-      utterance.lang = voice.lang
-    } else {
-      // Fallback: try Romanian voice
-      utterance.lang = 'ro-RO'
-      const allVoices = window.speechSynthesis.getVoices()
-      const roVoice = allVoices.find(v => v.lang.startsWith('ro'))
-      if (roVoice) utterance.voice = roVoice
+    try {
+      // Fetch first chunk
+      let nextBlobPromise: Promise<Blob> | null = speakText(chunks[0], settings, auth, voiceId)
+
+      for (let i = 0; i < chunks.length; i++) {
+        if (cancelledRef.current) break
+
+        // Await current chunk's audio
+        const audioBlob = await nextBlobPromise!
+        if (cancelledRef.current) break
+
+        // Start pre-fetching next chunk immediately
+        nextBlobPromise = (i + 1 < chunks.length)
+          ? speakText(chunks[i + 1], settings, auth, voiceId)
+          : null
+
+        // First chunk ready → switch from loading to speaking
+        if (i === 0) { setLoadingTTS(false); setSpeaking(true) }
+
+        const url = URL.createObjectURL(audioBlob)
+        const audio = new Audio(url)
+        audioRef.current = audio
+
+        // Wait for this chunk to finish playing
+        await new Promise<void>((resolve, reject) => {
+          audio.onended = () => { URL.revokeObjectURL(url); resolve() }
+          audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('playback error')) }
+          audio.play().catch(reject)
+        })
+      }
+    } catch (e) {
+      if (!cancelledRef.current) console.error('TTS error:', e)
+    } finally {
+      setSpeaking(false)
+      setLoadingTTS(false)
     }
-
-    utterance.onend = () => setSpeaking(false)
-    utterance.onerror = () => setSpeaking(false)
-
-    window.speechSynthesis.speak(utterance)
-    setSpeaking(true)
   }
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (speaking) window.speechSynthesis.cancel()
+      cancelledRef.current = true
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
     }
-  }, [speaking])
+  }, [])
 
   return (
     <div className={clsx('flex gap-2 md:gap-3 animate-slide-up', isUser && 'flex-row-reverse')}>
@@ -678,20 +771,25 @@ function MessageBubble({ message, streaming, voice }: { message: ChatMessage; st
           <>
             <div className="prose-bob">
               <ReactMarkdown>{message.content}</ReactMarkdown>
-              {streaming && <span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 animate-blink rounded-sm" />}
+              {isStreaming && <span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 animate-blink rounded-sm" />}
             </div>
-            {!streaming && message.content && (
+            {!isStreaming && message.content && (
               <button
                 onClick={toggleSpeak}
+                disabled={loadingTTS}
                 className={clsx(
-                  'mt-2 p-1 rounded transition-colors',
+                  'mt-2 p-1 rounded transition-colors disabled:opacity-40',
                   speaking
                     ? 'text-indigo-400 hover:text-indigo-300'
-                    : 'text-gray-600 hover:text-gray-400',
+                    : loadingTTS
+                      ? 'text-yellow-500'
+                      : 'text-gray-600 hover:text-gray-400',
                 )}
-                title={speaking ? 'Stop speaking' : 'Read aloud'}
+                title={loadingTTS ? 'Generating speech…' : speaking ? 'Stop speaking' : 'Read aloud'}
               >
-                {speaking ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                {loadingTTS ? (
+                  <span className="inline-block w-3.5 h-3.5 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin" />
+                ) : speaking ? <VolumeX size={14} /> : <Volume2 size={14} />}
               </button>
             )}
           </>

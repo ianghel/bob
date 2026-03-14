@@ -346,7 +346,7 @@ export async function transcribeAudio(
   audioBlob: Blob,
   settings: Settings,
   auth: AuthHeaders,
-  language: string = 'ro',
+  language: string = 'auto',
 ): Promise<string> {
   const form = new FormData()
   form.append('file', audioBlob, 'recording.webm')
@@ -360,6 +360,24 @@ export async function transcribeAudio(
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
   const data = await res.json()
   return data.text
+}
+
+// ── Text-to-Speech ───────────────────────────────────────────────────────
+
+export async function speakText(
+  text: string,
+  settings: Settings,
+  auth: AuthHeaders,
+  voice?: string,
+): Promise<Blob> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/speak`, {
+    method: 'POST',
+    headers: authHeaders(auth),
+    body: JSON.stringify({ text, voice }),
+    timeoutMs: 60_000,
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.blob()
 }
 
 // ── RAG ───────────────────────────────────────────────────────────────────

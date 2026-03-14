@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     whisper_base_url: str = ""
     whisper_api_key: str = ""
 
+    # -- TTS (Text-to-Speech) -------------------------------------------------
+    tts_base_url: str = ""
+    tts_api_key: str = ""
+    tts_model: str = "kokoro"
+    tts_voice: str = "af_heart"
+
     # -- Agent ----------------------------------------------------------------
     agent_timeout_seconds: int = 120
 

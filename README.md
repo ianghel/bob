@@ -7,8 +7,8 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 - **Conversational AI** with persistent session memory and SSE streaming
 - **Web Search** — Bob searches the internet (Google via Serper.dev) for up-to-date info, compares prices, and recommends products
 - **File Upload in Chat** — upload PDF, TXT, MD, DOCX files directly from chat; files are auto-ingested into Bob's memory (knowledge base) and Bob summarizes the content
-- **Voice Input** — record voice messages from the chat UI; audio is transcribed via Whisper (OpenAI-compatible STT server)
-- **Text-to-Speech** — Bob reads his replies aloud using the browser's Speech Synthesis API; choose from all available system voices
+- **Voice Input** — record voice messages from the chat UI; audio is transcribed via Whisper (OpenAI-compatible STT server) with auto language detection or manual language selection (RO, EN, DE, FR, ES)
+- **Text-to-Speech** — Bob reads his replies aloud using **Kokoro TTS** (GPU-accelerated, self-hosted); 26 voices (male/female, US/British English); long texts are automatically chunked with pre-fetched playback for seamless narration
 - **URL Fetching** — Bob can fetch and analyze web pages, saving them to his memory
 - **RAG** pipeline with ChromaDB vector store for document-grounded answers
 - **Agentic tool use** via Strands Agents (calculator, time, RAG lookup, summarize)
@@ -27,7 +27,8 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 │                                                              │
 │  /api/v1/auth    ──► JWT login / register / approval         │
 │  /api/v1/chat    ──► ConversationMemory ──► LLM + Web Tools   │
-│  /api/v1/chat/transcribe ──► Whisper STT                     │
+│  /api/v1/chat/transcribe ──► Whisper STT (auto-detect lang)   │
+│  /api/v1/chat/speak      ──► Kokoro TTS (GPU)                │
 │  /api/v1/rag     ──► ChromaDB ──────────► LLM Provider       │
 │  /api/v1/agent   ──► Strands Agent ─────► LLM Provider       │
 │  /api/v1/tokens  ──► API token management                    │
@@ -112,6 +113,10 @@ Key settings in `.env`:
 | `SERPER_API_KEY` | API key from [serper.dev](https://serper.dev) for Google search |
 | `WHISPER_BASE_URL` | Whisper-compatible STT server URL (e.g. `https://your-server/v1`) |
 | `WHISPER_API_KEY` | API key for the Whisper server |
+| `TTS_BASE_URL` | Kokoro TTS (or OpenAI-compatible) server URL (e.g. `https://your-server/v1`) |
+| `TTS_API_KEY` | API key for the TTS server |
+| `TTS_MODEL` | TTS model name (default: `kokoro`) |
+| `TTS_VOICE` | Default TTS voice (default: `af_heart`) |
 | `MAIL_*` | SMTP settings for user approval emails |
 
 ### 6. Start a model server
@@ -212,10 +217,18 @@ curl -X POST http://localhost:8000/api/v1/chat/fetch-url \
   -H "Authorization: Bearer <token>" \
   -d '{"url": "https://example.com/article"}'
 
-# Transcribe audio (voice-to-text via Whisper)
+# Transcribe audio (voice-to-text via Whisper, auto-detect language)
 curl -X POST http://localhost:8000/api/v1/chat/transcribe \
   -H "Authorization: Bearer <token>" \
-  -F "file=@recording.webm"
+  -F "file=@recording.webm" \
+  -F "language=auto"
+
+# Text-to-speech (returns audio/mpeg via Kokoro TTS)
+curl -X POST http://localhost:8000/api/v1/chat/speak \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"text": "Hello, I am Bob!", "voice": "af_heart"}' \
+  --output speech.mp3
 ```
 
 ### RAG (Knowledge Base)
@@ -401,8 +414,8 @@ bob/
 | **LangChain** | Document loading, splitting, embeddings |
 | **ChromaDB** | Local vector store |
 | **Serper.dev** | Google Search API for web and product search |
-| **Whisper** | Speech-to-text (OpenAI-compatible STT server) |
-| **Web Speech API** | Browser-native text-to-speech |
+| **Whisper** | Speech-to-text with auto language detection |
+| **Kokoro TTS** | GPU-accelerated text-to-speech (26 voices, chunked playback) |
 | **BeautifulSoup** | Web page content extraction |
 | **Amazon Bedrock** | Managed LLM inference (Claude, Titan) |
 | **openai SDK** | OpenAI-compatible client for local models |

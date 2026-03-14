@@ -552,12 +552,17 @@ class TranscribeResponse(BaseModel):
     text: str
 
 
+class SpeakRequest(BaseModel):
+    text: str = Field(..., max_length=4096, description="Text to synthesize")
+    voice: str | None = Field(None, description="Voice name override")
+
+
 @router.post("/transcribe", response_model=TranscribeResponse, summary="Transcribe audio via Whisper")
 async def transcribe_audio(
     user: CurrentUserDep,
     tenant: CurrentTenantDep,
     file: UploadFile = File(..., description="Audio file (webm, wav, mp3, ogg, m4a)"),
-    language: str = Form("ro"),
+    language: str = Form("auto"),
 ) -> TranscribeResponse:
     """Send an audio file to the Whisper API for transcription."""
     _allowed_audio = {".webm", ".wav", ".mp3", ".ogg", ".m4a", ".flac", ".mp4"}
@@ -582,7 +587,7 @@ async def transcribe_audio(
                 f"{_settings.whisper_base_url}/audio/transcriptions",
                 headers={"Authorization": f"Bearer {_settings.whisper_api_key}"},
                 files={"file": (file.filename or "audio.webm", audio_bytes, file.content_type or "audio/webm")},
-                data={"model": "whisper-1", "language": language},
+                data={"model": "whisper-1"} if language == "auto" else {"model": "whisper-1", "language": language},
             )
             resp.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -600,6 +605,60 @@ async def transcribe_audio(
 
     result = resp.json()
     return TranscribeResponse(text=result.get("text", ""))
+
+
+@router.post("/speak", summary="Text-to-speech via Kokoro TTS")
+async def speak_text(
+    body: SpeakRequest,
+    user: CurrentUserDep,
+    tenant: CurrentTenantDep,
+):
+    """Convert text to speech audio (MP3). Returns audio/mpeg stream."""
+    _settings = get_settings()
+    if not _settings.tts_base_url:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="TTS service not configured",
+        )
+
+    voice = body.voice or _settings.tts_voice
+    payload = {
+        "model": _settings.tts_model,
+        "input": body.text,
+        "voice": voice,
+        "response_format": "mp3",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{_settings.tts_base_url}/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {_settings.tts_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("TTS API error: %s — %s", e.response.status_code, e.response.text)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"TTS synthesis failed: {e.response.text}",
+        )
+    except Exception as e:
+        logger.error("TTS API connection error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach TTS service: {e}",
+        )
+
+    from fastapi.responses import Response
+    return Response(
+        content=resp.content,
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": "inline; filename=speech.mp3"},
+    )
 
 
 # NOTE: /sessions MUST come before /{session_id}/* routes to avoid

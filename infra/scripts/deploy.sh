@@ -245,6 +245,10 @@ JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 WHISPER_BASE_URL=${WHISPER_BASE_URL:-}
 WHISPER_API_KEY=${WHISPER_API_KEY:-}
+TTS_BASE_URL=${TTS_BASE_URL:-}
+TTS_API_KEY=${TTS_API_KEY:-}
+TTS_MODEL=${TTS_MODEL:-kokoro}
+TTS_VOICE=${TTS_VOICE:-af_heart}
 JWT_AUTO_REFRESH=true
 JWT_REFRESH_THRESHOLD_PERCENT=25
 SYSTEM_PROMPT=You are Bob, a helpful AI assistant.
@@ -264,6 +268,16 @@ else
         echo "WHISPER_BASE_URL=${WHISPER_BASE_URL:-}" >> .env
         echo "WHISPER_API_KEY=${WHISPER_API_KEY:-}" >> .env
         echo "Added Whisper config to .env"
+    fi
+    # Append TTS config if missing
+    if ! grep -q 'TTS_BASE_URL' .env; then
+        echo "" >> .env
+        echo "# TTS (Text-to-Speech)" >> .env
+        echo "TTS_BASE_URL=${TTS_BASE_URL:-}" >> .env
+        echo "TTS_API_KEY=${TTS_API_KEY:-}" >> .env
+        echo "TTS_MODEL=${TTS_MODEL:-kokoro}" >> .env
+        echo "TTS_VOICE=${TTS_VOICE:-af_heart}" >> .env
+        echo "Added TTS config to .env"
     fi
 fi
 

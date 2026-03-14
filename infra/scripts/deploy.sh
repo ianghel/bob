@@ -243,6 +243,8 @@ ADMIN_APPROVAL_EMAIL=${ADMIN_APPROVAL_EMAIL:-}
 JWT_SECRET=${JWT_SECRET}
 JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+WHISPER_BASE_URL=${WHISPER_BASE_URL:-}
+WHISPER_API_KEY=${WHISPER_API_KEY:-}
 JWT_AUTO_REFRESH=true
 JWT_REFRESH_THRESHOLD_PERCENT=25
 SYSTEM_PROMPT=You are Bob, a helpful AI assistant.
@@ -254,7 +256,15 @@ SESSION_EXPIRY_HOURS=24
 DOTENVEOF
     echo "Created .env"
 else
-    echo ".env already exists — skipping (edit manually on server if needed)"
+    echo ".env already exists — checking for new vars..."
+    # Append Whisper config if missing
+    if ! grep -q 'WHISPER_BASE_URL' .env; then
+        echo "" >> .env
+        echo "# Whisper (Speech-to-Text)" >> .env
+        echo "WHISPER_BASE_URL=${WHISPER_BASE_URL:-}" >> .env
+        echo "WHISPER_API_KEY=${WHISPER_API_KEY:-}" >> .env
+        echo "Added Whisper config to .env"
+    fi
 fi
 
 echo "--- Alembic migrations ---"

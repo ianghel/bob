@@ -1,4 +1,4 @@
-"""Chat endpoint with conversation memory, SSE streaming, RAG, and web search."""
+"""Chat endpoint with conversation memory, SSE streaming, RAG, web search, and voice."""
 
 import json
 import logging
@@ -541,6 +541,65 @@ async def fetch_url(
         document_id=ingest_result.document_id,
         chunks=ingest_result.chunks,
     )
+
+
+# ---------------------------------------------------------------------------
+# Voice transcription (Whisper)
+# ---------------------------------------------------------------------------
+
+
+class TranscribeResponse(BaseModel):
+    text: str
+
+
+@router.post("/transcribe", response_model=TranscribeResponse, summary="Transcribe audio via Whisper")
+async def transcribe_audio(
+    user: CurrentUserDep,
+    tenant: CurrentTenantDep,
+    file: UploadFile = File(..., description="Audio file (webm, wav, mp3, ogg, m4a)"),
+    language: str = Form("ro"),
+) -> TranscribeResponse:
+    """Send an audio file to the Whisper API for transcription."""
+    _allowed_audio = {".webm", ".wav", ".mp3", ".ogg", ".m4a", ".flac", ".mp4"}
+    suffix = Path(file.filename or "audio.webm").suffix.lower()
+    if suffix not in _allowed_audio:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported audio format: {suffix}. Allowed: {', '.join(_allowed_audio)}",
+        )
+
+    audio_bytes = await file.read()
+    if len(audio_bytes) > 25 * 1024 * 1024:  # 25 MB limit
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Audio file too large. Maximum: 25 MB",
+        )
+
+    _settings = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{_settings.whisper_base_url}/audio/transcriptions",
+                headers={"Authorization": f"Bearer {_settings.whisper_api_key}"},
+                files={"file": (file.filename or "audio.webm", audio_bytes, file.content_type or "audio/webm")},
+                data={"model": "whisper-1", "language": language},
+            )
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("Whisper API error: %s — %s", e.response.status_code, e.response.text)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Whisper transcription failed: {e.response.text}",
+        )
+    except Exception as e:
+        logger.error("Whisper API connection error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach Whisper service: {e}",
+        )
+
+    result = resp.json()
+    return TranscribeResponse(text=result.get("text", ""))
 
 
 # NOTE: /sessions MUST come before /{session_id}/* routes to avoid

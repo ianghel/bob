@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     web_search_max_results: int = 5
     serper_api_key: str = ""
 
+    # -- Whisper (Speech-to-Text) ---------------------------------------------
+    whisper_base_url: str = ""
+    whisper_api_key: str = ""
+
     # -- Agent ----------------------------------------------------------------
     agent_timeout_seconds: int = 120
 

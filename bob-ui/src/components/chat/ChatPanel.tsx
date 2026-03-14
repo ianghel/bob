@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Plus, Trash2, ChevronRight, Send, Square, PanelLeft, X, BookOpen, Archive, Paperclip } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, Send, Square, PanelLeft, X, BookOpen, Archive, Paperclip, Mic, MicOff, Volume2, VolumeX, Settings2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import ReactMarkdown from 'react-markdown'
 import { useSettings } from '../../store/settings'
 import { useAuth } from '../../store/auth'
-import { sendChat, streamChat, getHistory, deleteSession, listSessions, archiveSession, uploadChatFile } from '../../api/client'
+import { sendChat, streamChat, getHistory, deleteSession, listSessions, archiveSession, uploadChatFile, transcribeAudio } from '../../api/client'
 import type { ChatMessage, AuthHeaders, SessionSummary } from '../../api/client'
 
 interface Session {
@@ -36,6 +36,36 @@ export default function ChatPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+
+  // TTS voice selection
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>(
+    () => localStorage.getItem('bob-tts-voice') || ''
+  )
+  const [showVoiceMenu, setShowVoiceMenu] = useState(false)
+
+  // Load available voices
+  useEffect(() => {
+    const loadVoices = () => {
+      const v = window.speechSynthesis.getVoices()
+      if (v.length > 0) setVoices(v)
+    }
+    loadVoices()
+    window.speechSynthesis.addEventListener('voiceschanged', loadVoices)
+    return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices)
+  }, [])
+
+  const setVoice = (uri: string) => {
+    setSelectedVoiceURI(uri)
+    localStorage.setItem('bob-tts-voice', uri)
+    setShowVoiceMenu(false)
+  }
+
+  const selectedVoice = voices.find(v => v.voiceURI === selectedVoiceURI) || null
 
   const active = sessions.find(s => s.id === activeId)!
   const containerRef = useRef<HTMLDivElement>(null)
@@ -272,6 +302,54 @@ export default function ChatPanel() {
     }
   }
 
+  const toggleRecording = async () => {
+    if (recording) {
+      // Stop recording
+      mediaRecorderRef.current?.stop()
+      setRecording(false)
+      return
+    }
+
+    // Start recording
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
+      mediaRecorderRef.current = mediaRecorder
+      chunksRef.current = []
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data)
+      }
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks to release the mic
+        stream.getTracks().forEach(t => t.stop())
+
+        const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' })
+        if (audioBlob.size < 100) return // too short, ignore
+
+        setTranscribing(true)
+        try {
+          const text = await transcribeAudio(audioBlob, settings, authHeaders)
+          if (text.trim()) {
+            setInput(text.trim())
+            // Auto-focus textarea so user can review or send
+            textareaRef.current?.focus()
+          }
+        } catch (err: unknown) {
+          setError(err instanceof Error ? err.message : 'Transcription failed')
+        } finally {
+          setTranscribing(false)
+        }
+      }
+
+      mediaRecorder.start()
+      setRecording(true)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Microphone access denied')
+    }
+  }
+
   return (
     <div
       ref={containerRef}
@@ -356,13 +434,14 @@ export default function ChatPanel() {
           )}
 
           {active.messages.map((msg, i) => (
-            <MessageBubble key={i} message={msg} />
+            <MessageBubble key={i} message={msg} voice={selectedVoice} />
           ))}
 
           {streaming && streamingContent && (
             <MessageBubble
               message={{ role: 'assistant', content: streamingContent }}
               streaming
+              voice={selectedVoice}
             />
           )}
 
@@ -384,14 +463,42 @@ export default function ChatPanel() {
 
         {/* Input */}
         <div className="border-t border-surface-700 p-2 md:p-4">
+          {/* Textarea + Send row */}
           <div className="flex gap-2 items-end">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder={transcribing ? 'Transcribing audio…' : uploading ? 'Uploading file…' : recording ? 'Recording… click mic to stop' : useKnowledge ? 'Message Bob (knowledge base active)…' : 'Message Bob…'}
+              rows={1}
+              className="input flex-1 resize-none leading-relaxed"
+              style={{ minHeight: '44px' }}
+            />
+            {streaming ? (
+              <button onClick={stopStreaming} className="btn bg-red-900/40 hover:bg-red-800/50 text-red-400 flex-shrink-0 h-11">
+                <Square size={16} />
+              </button>
+            ) : (
+              <button
+                onClick={send}
+                disabled={!input.trim() || loading}
+                className="btn-primary flex-shrink-0 h-11"
+              >
+                <Send size={16} />
+              </button>
+            )}
+          </div>
+
+          {/* Toolbar row — under the textarea */}
+          <div className="flex gap-1 items-center mt-2">
             {/* Mobile session toggle */}
             <button
               onClick={() => setShowSessions(v => !v)}
               className="md:hidden flex-shrink-0 p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-surface-700 transition-colors"
               title="Chat sessions"
             >
-              <PanelLeft size={18} />
+              <PanelLeft size={16} />
             </button>
             {/* Knowledge base toggle */}
             <button
@@ -404,7 +511,7 @@ export default function ChatPanel() {
               )}
               title={useKnowledge ? 'Knowledge base: ON' : 'Knowledge base: OFF'}
             >
-              <BookOpen size={18} />
+              <BookOpen size={16} />
             </button>
             {/* File upload */}
             <input
@@ -420,44 +527,134 @@ export default function ChatPanel() {
               className="flex-shrink-0 p-2 rounded-lg transition-colors text-gray-400 hover:text-gray-200 hover:bg-surface-700 disabled:opacity-40"
               title="Upload file to Bob's memory (PDF, TXT, MD, DOCX)"
             >
-              <Paperclip size={18} />
+              <Paperclip size={16} />
             </button>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder={uploading ? 'Uploading file…' : useKnowledge ? 'Message Bob (knowledge base active)…' : 'Message Bob…'}
-              rows={1}
-              className="input flex-1 resize-none leading-relaxed"
-              style={{ minHeight: '40px' }}
-            />
-            {streaming ? (
-              <button onClick={stopStreaming} className="btn bg-red-900/40 hover:bg-red-800/50 text-red-400 flex-shrink-0 h-10">
-                <Square size={14} />
-              </button>
-            ) : (
+            {/* Voice recording */}
+            <button
+              onClick={toggleRecording}
+              disabled={transcribing || loading}
+              className={clsx(
+                'flex-shrink-0 p-2 rounded-lg transition-colors disabled:opacity-40',
+                recording
+                  ? 'text-red-400 bg-red-600/20 border border-red-500/30 animate-pulse'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-surface-700',
+              )}
+              title={recording ? 'Stop recording' : transcribing ? 'Transcribing…' : 'Voice input'}
+            >
+              {recording ? <MicOff size={16} /> : <Mic size={16} />}
+            </button>
+            {/* TTS voice picker */}
+            <div className="relative flex-shrink-0">
               <button
-                onClick={send}
-                disabled={!input.trim() || loading}
-                className="btn-primary flex-shrink-0 h-10"
+                onClick={() => setShowVoiceMenu(v => !v)}
+                className={clsx(
+                  'p-2 rounded-lg transition-colors',
+                  selectedVoice
+                    ? 'text-indigo-400 bg-indigo-600/20 border border-indigo-500/30'
+                    : 'text-gray-400 hover:text-gray-200 hover:bg-surface-700',
+                )}
+                title={selectedVoice ? `TTS: ${selectedVoice.name}` : 'Select TTS voice'}
               >
-                <Send size={14} />
+                <Volume2 size={16} />
               </button>
-            )}
+              {showVoiceMenu && (
+                <div className="absolute bottom-full left-0 mb-2 w-72 max-h-64 overflow-y-auto rounded-xl bg-surface-800 border border-surface-600 shadow-xl z-50">
+                  <div className="p-2 border-b border-surface-700 text-xs text-gray-400 font-medium">
+                    Select voice for TTS
+                  </div>
+                  <button
+                    onClick={() => setVoice('')}
+                    className={clsx(
+                      'w-full text-left px-3 py-2 text-xs hover:bg-surface-700 transition-colors',
+                      !selectedVoiceURI ? 'text-indigo-400 bg-surface-700/50' : 'text-gray-300',
+                    )}
+                  >
+                    Auto (browser default)
+                  </button>
+                  {voices.map(v => (
+                    <button
+                      key={v.voiceURI}
+                      onClick={() => setVoice(v.voiceURI)}
+                      className={clsx(
+                        'w-full text-left px-3 py-2 text-xs hover:bg-surface-700 transition-colors flex items-center gap-2',
+                        selectedVoiceURI === v.voiceURI ? 'text-indigo-400 bg-surface-700/50' : 'text-gray-300',
+                      )}
+                    >
+                      <span className="flex-1 truncate">{v.name}</span>
+                      <span className="text-[10px] text-gray-500 flex-shrink-0">{v.lang}</span>
+                    </button>
+                  ))}
+                  {voices.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-gray-500">No voices available</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Spacer + session info (desktop) */}
+            <div className="flex-1" />
+            <p className="hidden md:block text-xs text-gray-600 text-right">
+              Session: <span className="font-mono">{activeId.slice(0, 8)}…</span>
+              {useKnowledge && <span className="ml-2 text-indigo-500">KB active</span>}
+            </p>
           </div>
-          <p className="hidden md:block text-xs text-gray-600 mt-1.5 text-right">
-            Session: <span className="font-mono">{activeId.slice(0, 8)}…</span>
-            {useKnowledge && <span className="ml-2 text-indigo-500">KB active</span>}
-          </p>
         </div>
       </div>
     </div>
   )
 }
 
-function MessageBubble({ message, streaming }: { message: ChatMessage; streaming?: boolean }) {
+function MessageBubble({ message, streaming, voice }: { message: ChatMessage; streaming?: boolean; voice?: SpeechSynthesisVoice | null }) {
   const isUser = message.role === 'user'
+  const [speaking, setSpeaking] = useState(false)
+
+  const toggleSpeak = () => {
+    if (speaking) {
+      window.speechSynthesis.cancel()
+      setSpeaking(false)
+      return
+    }
+
+    // Strip markdown for cleaner speech
+    const plainText = message.content
+      .replace(/```[\s\S]*?```/g, '') // code blocks
+      .replace(/`[^`]*`/g, '')       // inline code
+      .replace(/[#*_~>\[\]()!|-]/g, '') // markdown symbols
+      .replace(/\n{2,}/g, '. ')      // paragraph breaks → pause
+      .replace(/\n/g, ' ')
+      .trim()
+
+    if (!plainText) return
+
+    const utterance = new SpeechSynthesisUtterance(plainText)
+    utterance.rate = 1.0
+    utterance.pitch = 1.0
+
+    if (voice) {
+      utterance.voice = voice
+      utterance.lang = voice.lang
+    } else {
+      // Fallback: try Romanian voice
+      utterance.lang = 'ro-RO'
+      const allVoices = window.speechSynthesis.getVoices()
+      const roVoice = allVoices.find(v => v.lang.startsWith('ro'))
+      if (roVoice) utterance.voice = roVoice
+    }
+
+    utterance.onend = () => setSpeaking(false)
+    utterance.onerror = () => setSpeaking(false)
+
+    window.speechSynthesis.speak(utterance)
+    setSpeaking(true)
+  }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (speaking) window.speechSynthesis.cancel()
+    }
+  }, [speaking])
+
   return (
     <div className={clsx('flex gap-2 md:gap-3 animate-slide-up', isUser && 'flex-row-reverse')}>
       {/* Avatar */}
@@ -478,10 +675,26 @@ function MessageBubble({ message, streaming }: { message: ChatMessage; streaming
         {isUser ? (
           <p className="text-sm text-gray-200 whitespace-pre-wrap">{message.content}</p>
         ) : (
-          <div className="prose-bob">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
-            {streaming && <span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 animate-blink rounded-sm" />}
-          </div>
+          <>
+            <div className="prose-bob">
+              <ReactMarkdown>{message.content}</ReactMarkdown>
+              {streaming && <span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 animate-blink rounded-sm" />}
+            </div>
+            {!streaming && message.content && (
+              <button
+                onClick={toggleSpeak}
+                className={clsx(
+                  'mt-2 p-1 rounded transition-colors',
+                  speaking
+                    ? 'text-indigo-400 hover:text-indigo-300'
+                    : 'text-gray-600 hover:text-gray-400',
+                )}
+                title={speaking ? 'Stop speaking' : 'Read aloud'}
+              >
+                {speaking ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

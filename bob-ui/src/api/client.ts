@@ -340,6 +340,28 @@ export async function uploadChatFile(
   return res.json()
 }
 
+// ── Voice transcription ───────────────────────────────────────────────────
+
+export async function transcribeAudio(
+  audioBlob: Blob,
+  settings: Settings,
+  auth: AuthHeaders,
+  language: string = 'ro',
+): Promise<string> {
+  const form = new FormData()
+  form.append('file', audioBlob, 'recording.webm')
+  form.append('language', language)
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/chat/transcribe`, {
+    method: 'POST',
+    headers: authHeadersNoBody(auth),
+    body: form,
+    timeoutMs: 60_000,
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  const data = await res.json()
+  return data.text
+}
+
 // ── RAG ───────────────────────────────────────────────────────────────────
 
 export async function ragQuery(query: string, k: number, settings: Settings, auth: AuthHeaders): Promise<RAGQueryResponse> {

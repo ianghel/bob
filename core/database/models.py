@@ -121,6 +121,59 @@ class AgentRun(Base):
     user = relationship("User", back_populates="agent_runs")
 
 
+class EmailAccount(Base):
+    """OAuth-connected email account (per user, multi-tenant)."""
+    __tablename__ = "email_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider", "email_address", name="uq_user_provider_email"),
+    )
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider = Column(String(20), nullable=False, default="gmail")  # gmail | yahoo | outlook
+    email_address = Column(String(255), nullable=False)
+    access_token = Column(Text, nullable=True)
+    refresh_token = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime, nullable=True)
+    scopes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    last_sync_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    user = relationship("User")
+    tenant = relationship("Tenant")
+
+
+class EmailDigest(Base):
+    """Processed email — triaged by LLM."""
+    __tablename__ = "email_digests"
+    __table_args__ = (
+        Index("ix_email_digests_user_status", "user_id", "status"),
+    )
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    message_id = Column(String(255), nullable=False, unique=True, index=True)
+    source = Column(String(20), nullable=False, default="gmail")
+    sender = Column(String(500), nullable=False)
+    subject = Column(String(1000), nullable=True)
+    body_snippet = Column(Text, nullable=True)
+    attachments_json = Column(JSON, default=list)
+    urgency = Column(String(10), nullable=False, default="medium")
+    category = Column(String(50), nullable=True)
+    action = Column(Text, nullable=True)
+    reply_draft = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="pending")
+    received_at = Column(DateTime, nullable=True)
+    processed_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    tenant = relationship("Tenant")
+    user = relationship("User")
+
+
 class ApiToken(Base):
     __tablename__ = "api_tokens"
 

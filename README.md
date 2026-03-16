@@ -10,8 +10,11 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 - **Voice Input** — record voice messages from the chat UI; audio is transcribed via Whisper (OpenAI-compatible STT server) with auto language detection or manual language selection (RO, EN, DE, FR, ES)
 - **Text-to-Speech** — Bob reads his replies aloud using **Kokoro TTS** (GPU-accelerated, self-hosted); 26 voices (male/female, US/British English); long texts are automatically chunked with pre-fetched playback for seamless narration
 - **URL Fetching** — Bob can fetch and analyze web pages, saving them to his memory
+- **Gmail Integration** — multi-tenant Gmail OAuth2; each user connects their own Gmail account from the UI. Bob syncs inbox (unread) and sent emails, triages them with LLM (urgency, category, action, reply draft), and displays everything in an Email dashboard. Users can also send emails, reply, and ask Bob about their emails directly from chat.
+- **Email in Chat** — ask Bob "ce emailuri am primit azi?", "trimite un email lui X", or "rezumat emailuri" and he uses tool calls (`send_email`, `search_emails`, `get_email_summary`) to interact with your Gmail
+- **Background Email Sync** — automatic sync every 10 minutes fetches the latest 20 inbox + 20 sent emails per connected account
 - **RAG** pipeline with ChromaDB vector store for document-grounded answers
-- **Agentic tool use** via Strands Agents (calculator, time, RAG lookup, summarize)
+- **Agentic tool use** via Strands Agents (calculator, time, RAG lookup, summarize, email tools)
 - **Multi-tenant auth** with JWT login, user registration, admin approval, and API tokens
 - **Provider abstraction**: Amazon Bedrock or any OpenAI-compatible server (LM Studio, Ollama, vLLM)
 - **React frontend** (Vite + TypeScript + Tailwind)
@@ -29,6 +32,7 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 │  /api/v1/chat    ──► ConversationMemory ──► LLM + Web Tools   │
 │  /api/v1/chat/transcribe ──► Whisper STT (auto-detect lang)   │
 │  /api/v1/chat/speak      ──► Kokoro TTS (GPU)                │
+│  /api/v1/email   ──► Gmail OAuth ──► Sync + LLM triage       │
 │  /api/v1/rag     ──► ChromaDB ──────────► LLM Provider       │
 │  /api/v1/agent   ──► Strands Agent ─────► LLM Provider       │
 │  /api/v1/tokens  ──► API token management                    │
@@ -117,6 +121,10 @@ Key settings in `.env`:
 | `TTS_API_KEY` | API key for the TTS server |
 | `TTS_MODEL` | TTS model name (default: `kokoro`) |
 | `TTS_VOICE` | Default TTS voice (default: `af_heart`) |
+| `GOOGLE_CLIENT_ID` | Google OAuth2 client ID (for Gmail integration) |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth2 client secret |
+| `GOOGLE_REDIRECT_URI` | OAuth callback URL (e.g. `https://your-domain/api/v1/email/callback/gmail`) |
+| `BASE_URL` | Public app URL (e.g. `https://your-domain`) |
 | `MAIL_*` | SMTP settings for user approval emails |
 
 ### 6. Start a model server
@@ -229,6 +237,38 @@ curl -X POST http://localhost:8000/api/v1/chat/speak \
   -H "Authorization: Bearer <token>" \
   -d '{"text": "Hello, I am Bob!", "voice": "af_heart"}' \
   --output speech.mp3
+```
+
+### Email (Gmail)
+
+```bash
+# Check connected email accounts
+curl http://localhost:8000/api/v1/email/connections \
+  -H "Authorization: Bearer <token>"
+
+# Connect Gmail (returns Google OAuth URL)
+curl http://localhost:8000/api/v1/email/connect/gmail \
+  -H "Authorization: Bearer <token>"
+
+# Sync emails (fetch latest 20 inbox + 20 sent, triage with LLM)
+curl -X POST http://localhost:8000/api/v1/email/sync \
+  -H "Authorization: Bearer <token>"
+
+# Get email inbox (supports ?status=pending|sent|skipped)
+curl http://localhost:8000/api/v1/email/inbox \
+  -H "Authorization: Bearer <token>"
+
+# Get email stats (pending count, high urgency count)
+curl http://localhost:8000/api/v1/email/stats \
+  -H "Authorization: Bearer <token>"
+
+# Get daily email summary
+curl http://localhost:8000/api/v1/email/summary \
+  -H "Authorization: Bearer <token>"
+
+# Disconnect Gmail
+curl -X POST http://localhost:8000/api/v1/email/disconnect/gmail \
+  -H "Authorization: Bearer <token>"
 ```
 
 ### RAG (Knowledge Base)
@@ -349,6 +389,7 @@ bob/
 │   └── routes/
 │       ├── auth.py           # JWT login, register, user management
 │       ├── chat.py           # Conversational chat with memory + SSE
+│       ├── email.py          # Gmail OAuth, sync, inbox, actions
 │       ├── rag.py            # RAG ingestion and querying
 │       ├── agent.py          # Strands agent task runner
 │       ├── tenants.py        # Tenant administration
@@ -367,7 +408,11 @@ bob/
 │   │   ├── bedrock.py        # Amazon Bedrock provider (boto3)
 │   │   └── local.py          # OpenAI-compatible provider
 │   ├── chat/
-│   │   └── web_tools.py      # Web search, product search, URL fetch tools
+│   │   ├── web_tools.py      # Web search, product search, URL fetch tools
+│   │   └── email_tools.py    # Email tools for chat (send, search, summary)
+│   ├── email/
+│   │   ├── gmail.py           # Gmail OAuth2 client + API (fetch, send)
+│   │   └── sync_task.py       # Background email sync (every 10 min)
 │   ├── memory/
 │   │   └── conversation.py   # DB-backed session store
 │   ├── rag/
@@ -416,6 +461,7 @@ bob/
 | **Serper.dev** | Google Search API for web and product search |
 | **Whisper** | Speech-to-text with auto language detection |
 | **Kokoro TTS** | GPU-accelerated text-to-speech (26 voices, chunked playback) |
+| **Gmail API** | OAuth2 multi-tenant email integration (read, send, sync) |
 | **BeautifulSoup** | Web page content extraction |
 | **Amazon Bedrock** | Managed LLM inference (Claude, Titan) |
 | **openai SDK** | OpenAI-compatible client for local models |

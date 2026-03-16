@@ -17,7 +17,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from api.routes import agent, auth, chat, rag, tenants, tokens
+from api.routes import agent, auth, chat, email, rag, tenants, tokens
 from core.config import get_settings
 
 settings = get_settings()
@@ -57,7 +57,16 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables verified/created")
 
+    # Start background email sync task
+    from core.email.sync_task import start_email_sync_task
+
+    sync_task = start_email_sync_task()
+
     yield
+
+    # Cancel background task
+    if sync_task and not sync_task.done():
+        sync_task.cancel()
 
     await engine.dispose()
     logger.info("Shutting down bob")
@@ -162,6 +171,7 @@ app.include_router(tenants.router, prefix=API_PREFIX)
 app.include_router(chat.router, prefix=API_PREFIX)
 app.include_router(rag.router, prefix=API_PREFIX)
 app.include_router(agent.router, prefix=API_PREFIX)
+app.include_router(email.router, prefix=API_PREFIX)
 app.include_router(tokens.router, prefix=API_PREFIX)
 
 

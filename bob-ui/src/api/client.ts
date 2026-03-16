@@ -493,6 +493,139 @@ export async function revokeApiToken(
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
 }
 
+// ── Email ─────────────────────────────────────────────────────────────────
+
+export interface EmailConnections {
+  gmail: { connected: boolean; email: string | null; can_connect: boolean }
+}
+
+export async function getEmailConnections(
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<EmailConnections> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/connections`, {
+    headers: authHeadersNoBody(auth),
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
+export async function connectGmail(
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<{ auth_url: string }> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/connect/gmail`, {
+    headers: authHeadersNoBody(auth),
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
+export async function disconnectGmail(
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<void> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/disconnect/gmail`, {
+    method: 'POST',
+    headers: authHeadersNoBody(auth),
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+}
+
+export async function syncEmails(
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<{ synced: number; errors: string[] | null }> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/sync`, {
+    method: 'POST',
+    headers: authHeadersNoBody(auth),
+    timeoutMs: 120_000,
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
+export interface EmailDigestItem {
+  id: string
+  message_id: string
+  source: string
+  sender: string
+  subject: string
+  urgency: 'low' | 'medium' | 'high'
+  category: string | null
+  action: string | null
+  reply_draft: string | null
+  attachments: { name: string; type: string; size: number }[]
+  status: string
+  received_at: string | null
+  processed_at: string
+}
+
+export interface EmailStats {
+  pending: number
+  high_urgency: number
+}
+
+export async function getEmailInbox(
+  settings: Settings,
+  auth: AuthHeaders,
+  statusFilter?: string,
+): Promise<EmailDigestItem[]> {
+  const params = new URLSearchParams()
+  if (statusFilter) params.set('status', statusFilter)
+  const qs = params.toString() ? `?${params}` : ''
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/inbox${qs}`, {
+    headers: authHeadersNoBody(auth),
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
+export async function getEmailStats(
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<EmailStats> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/stats`, {
+    headers: authHeadersNoBody(auth),
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
+export interface EmailSummary {
+  summary: string
+  email_count: number
+  categories: Record<string, number>
+}
+
+export async function getEmailSummary(
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<EmailSummary> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/summary`, {
+    headers: authHeadersNoBody(auth),
+    timeoutMs: 60_000,
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
+export async function emailAction(
+  digestId: string,
+  action: 'send' | 'skip' | 'edit',
+  settings: Settings,
+  auth: AuthHeaders,
+  editedReply?: string,
+): Promise<EmailDigestItem> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/${digestId}/action`, {
+    method: 'PATCH',
+    headers: authHeaders(auth),
+    body: JSON.stringify({ action, edited_reply: editedReply }),
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
 // ── Health ─────────────────────────────────────────────────────────────────
 
 export async function healthCheck(baseUrl: string): Promise<boolean> {

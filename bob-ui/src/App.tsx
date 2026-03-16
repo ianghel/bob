@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { MessageSquare, BookOpen, Bot, Settings, Wifi, WifiOff, LogOut } from 'lucide-react'
+import { MessageSquare, BookOpen, Mail, Bot, Settings, Wifi, WifiOff, LogOut } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useSettings } from './store/settings'
 import { useAuth } from './store/auth'
@@ -8,13 +8,15 @@ import ChatPanel from './components/chat/ChatPanel'
 import RAGPanel from './components/rag/RAGPanel'
 import AgentPanel from './components/agent/AgentPanel'
 import SettingsPanel from './components/settings/SettingsPanel'
+import EmailPanel from './components/email/EmailPanel'
 import LoginPage from './components/auth/LoginPage'
 
-type Tab = 'chat' | 'rag' | 'agent' | 'settings'
+type Tab = 'chat' | 'rag' | 'email' | 'agent' | 'settings'
 
 const TABS = [
   { id: 'chat' as Tab, label: 'Chat', icon: MessageSquare },
   { id: 'rag' as Tab, label: 'Knowledge', icon: BookOpen },
+  { id: 'email' as Tab, label: 'Email', icon: Mail },
   { id: 'agent' as Tab, label: 'Agent', icon: Bot },
   { id: 'settings' as Tab, label: 'Settings', icon: Settings },
 ]
@@ -118,6 +120,7 @@ export default function App() {
         <div className="flex-1 overflow-hidden">
           {tab === 'chat' && <ChatPanel />}
           {tab === 'rag' && <RAGPanel />}
+          {tab === 'email' && <EmailPanel />}
           {tab === 'agent' && <AgentPanel />}
           {tab === 'settings' && <SettingsPanel />}
         </div>

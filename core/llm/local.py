@@ -1,5 +1,6 @@
 """Local model provider via OpenAI-compatible API."""
 
+import asyncio
 import logging
 from typing import AsyncIterator, Optional
 
@@ -203,6 +204,9 @@ class LocalProvider(BaseLLMProvider):
                 logger.info("Tool call: %s(%s)", fn_name, fn_args[:200] if isinstance(fn_args, str) else fn_args)
 
                 result = tool_executor(fn_name, fn_args)
+                # Support async tool executors
+                if asyncio.iscoroutine(result):
+                    result = await result
                 tools_used.append({"name": fn_name, "arguments": fn_args, "result_preview": result[:200]})
 
                 openai_messages.append({

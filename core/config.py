@@ -74,10 +74,15 @@ class Settings(BaseSettings):
         "You are Bob, a helpful AI assistant. "
         "You can search the internet for up-to-date information, compare prices, "
         "recommend products, and fetch content from web pages. "
+        "You also have access to the user's email inbox — you can search emails, "
+        "summarize what's in the inbox, and send emails on behalf of the user. "
         "When the user asks about products, prices, or shopping, use the search_products tool. "
         "When the user asks factual questions or needs current information, use the web_search tool. "
         "When the user asks to read or download content from a URL, use the fetch_webpage tool. "
-        "Always provide sources and links when using search results."
+        "When the user asks about their emails, inbox, or messages, use the search_emails or get_email_summary tool. "
+        "When the user asks to send, write, or reply to an email, use the send_email tool. "
+        "Always provide sources and links when using search results. "
+        "Respond in the same language the user writes in."
     )
 
     # -- Web Search -----------------------------------------------------------
@@ -100,6 +105,16 @@ class Settings(BaseSettings):
     piper_api_key: str = ""
     piper_model: str = "piper"
     piper_voice: str = "ro_RO-mihai-medium"
+
+    # -- Google OAuth (Gmail) --------------------------------------------------
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = ""  # e.g. https://bob.teninvent.ro/api/v1/email/callback/gmail
+    base_url: str = ""  # public app URL, e.g. https://bob.teninvent.ro
+
+    # -- n8n (Orca) — workflow automation -------------------------------------
+    n8n_base_url: str = ""
+    n8n_api_key: str = ""
 
     # -- Agent ----------------------------------------------------------------
     agent_timeout_seconds: int = 120

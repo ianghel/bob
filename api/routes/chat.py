@@ -19,6 +19,7 @@ from api.dependencies import (
     LLMDep,
     RetrieverDep,
 )
+from core.chat.email_tools import EMAIL_TOOL_SCHEMAS, make_email_tool_executor
 from core.chat.web_tools import TOOL_SCHEMAS, execute_tool
 from core.config import get_settings
 from core.llm.base import Message, MessageRole
@@ -189,7 +190,24 @@ async def chat(
     )
 
     _settings2 = get_settings()
-    use_tools = request.use_web_search and _settings2.web_search_enabled and isinstance(llm, LocalProvider)
+    use_web_tools = request.use_web_search and _settings2.web_search_enabled and isinstance(llm, LocalProvider)
+
+    # Email tools are ALWAYS available; web tools only when enabled
+    email_executor = make_email_tool_executor(db, user.id, tenant.id)
+    active_tools = list(EMAIL_TOOL_SCHEMAS)
+    if use_web_tools:
+        active_tools += list(TOOL_SCHEMAS)
+
+    # Always enable tool calling (email tools are always useful)
+    use_tools = isinstance(llm, LocalProvider)
+
+    async def combined_tool_executor(name: str, arguments) -> str:
+        # Try email tools first
+        result = await email_executor(name, arguments)
+        if result is not None:
+            return result
+        # Fall back to web tools (sync)
+        return execute_tool(name, arguments)
 
     if request.stream:
         return StreamingResponse(
@@ -204,6 +222,8 @@ async def chat(
                 knowledge_used=request.use_knowledge and knowledge_sources is not None,
                 knowledge_sources=knowledge_sources,
                 use_tools=use_tools,
+                tool_schemas=active_tools,
+                tool_executor=combined_tool_executor,
             ),
             media_type="text/event-stream",
             headers={
@@ -218,8 +238,8 @@ async def chat(
         if use_tools:
             response = await llm.chat_with_tools(
                 messages=messages,
-                tools=TOOL_SCHEMAS,
-                tool_executor=execute_tool,
+                tools=active_tools,
+                tool_executor=combined_tool_executor,
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
             )
@@ -272,6 +292,8 @@ async def _stream_chat(
     knowledge_used: bool = False,
     knowledge_sources: list[str] | None = None,
     use_tools: bool = False,
+    tool_schemas: list[dict] | None = None,
+    tool_executor=None,
 ):
     """Async generator producing SSE-formatted chunks.
 
@@ -286,10 +308,12 @@ async def _stream_chat(
             # Tool calling: run non-streaming to handle tool round-trips,
             # then emit the final content as SSE chunks.
             yield f"data: {json.dumps({'chunk': '', 'session_id': session_id, 'searching': True})}\n\n"
+            _tools = tool_schemas or TOOL_SCHEMAS
+            _executor = tool_executor or execute_tool
             response = await llm.chat_with_tools(
                 messages=messages,
-                tools=TOOL_SCHEMAS,
-                tool_executor=execute_tool,
+                tools=_tools,
+                tool_executor=_executor,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )

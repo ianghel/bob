@@ -261,6 +261,11 @@ CONTEXT_SLIDING_WINDOW_TURNS=10
 CONTEXT_SUMMARY_ENABLED=true
 MAX_TURNS_PER_SESSION=100
 SESSION_EXPIRY_HOURS=24
+N8N_BASE_URL=${N8N_BASE_URL:-}
+N8N_API_KEY=${N8N_API_KEY:-}
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-https://${FULL_DOMAIN}/api/v1/email/callback/gmail}
 DOTENVEOF
     echo "Created .env"
 else
@@ -292,6 +297,23 @@ else
         echo "PIPER_MODEL=${PIPER_MODEL:-piper}" >> .env
         echo "PIPER_VOICE=${PIPER_VOICE:-ro_RO-mihai-medium}" >> .env
         echo "Added Piper config to .env"
+    fi
+    # Append n8n config if missing
+    if ! grep -q 'N8N_BASE_URL' .env; then
+        echo "" >> .env
+        echo "# n8n (workflow automation)" >> .env
+        echo "N8N_BASE_URL=${N8N_BASE_URL:-}" >> .env
+        echo "N8N_API_KEY=${N8N_API_KEY:-}" >> .env
+        echo "Added n8n config to .env"
+    fi
+    # Append Google OAuth config if missing
+    if ! grep -q 'GOOGLE_CLIENT_ID' .env; then
+        echo "" >> .env
+        echo "# Google OAuth (Gmail)" >> .env
+        echo "GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}" >> .env
+        echo "GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}" >> .env
+        echo "GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-https://${FULL_DOMAIN}/api/v1/email/callback/gmail}" >> .env
+        echo "Added Google OAuth config to .env"
     fi
 fi
 

@@ -55,8 +55,14 @@ async def send_verification_email(to: str, token: str, base_url: str = "http://l
     link = f"{base_url}/api/v1/auth/verify-email?token={token}"
     await _send(
         to=to,
-        subject="Verify your email",
-        body=f"Please verify your email by clicking the link below:\n\n{link}\n\nIf you did not create an account, ignore this email.",
+        subject="Bob — Verify your email to activate your account",
+        body=(
+            f"Welcome to Bob!\n\n"
+            f"Please verify your email address by clicking the link below:\n\n"
+            f"  {link}\n\n"
+            f"Once verified, your account will be activated and you can sign in.\n\n"
+            f"If you did not create an account, simply ignore this email."
+        ),
     )
 
 

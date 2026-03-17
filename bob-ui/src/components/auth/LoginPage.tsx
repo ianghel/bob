@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useAuth } from '../../store/auth'
 import { useSettings } from '../../store/settings'
@@ -15,6 +15,15 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
+  // Detect redirect from email verification
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('email_verified') === '1') {
+      setSuccess('Email verified successfully! You can now sign in.')
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
@@ -26,7 +35,7 @@ export default function LoginPage() {
     try {
       if (mode === 'register') {
         await apiRegister(baseUrl, email, password, name)
-        setSuccess('Registration successful! Your account is pending admin approval. You will be able to log in once approved.')
+        setSuccess('Registration successful! Please check your email to verify your account.')
         setMode('login')
       } else {
         const data = await apiLogin(baseUrl, email, password)

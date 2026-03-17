@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { MessageSquare, BookOpen, Mail, Bot, Settings, Wifi, WifiOff, LogOut } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useSettings } from './store/settings'
@@ -13,7 +13,7 @@ import LoginPage from './components/auth/LoginPage'
 
 type Tab = 'chat' | 'rag' | 'email' | 'agent' | 'settings'
 
-const TABS = [
+const BASE_TABS = [
   { id: 'chat' as Tab, label: 'Chat', icon: MessageSquare },
   { id: 'rag' as Tab, label: 'Knowledge', icon: BookOpen },
   { id: 'email' as Tab, label: 'Email', icon: Mail },
@@ -26,6 +26,13 @@ export default function App() {
   const [online, setOnline] = useState<boolean | null>(null)
   const { settings } = useSettings()
   const { isAuthenticated, auth, logout } = useAuth()
+
+  // Only show Email tab for Gmail users
+  const isGmail = auth.user?.email?.toLowerCase().endsWith('@gmail.com') ?? false
+  const TABS = useMemo(
+    () => (isGmail ? BASE_TABS : BASE_TABS.filter(t => t.id !== 'email')),
+    [isGmail],
+  )
 
   useEffect(() => {
     const check = () =>

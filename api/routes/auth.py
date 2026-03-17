@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -96,7 +97,7 @@ async def register_user(
         user_id=user.id,
         email=user.email,
         name=user.name,
-        message="Registration successful. Your account is pending admin approval.",
+        message="Registration successful! Please check your email to verify your account.",
     )
 
 
@@ -122,14 +123,17 @@ async def login_user(
 async def verify_email_endpoint(
     token: str,
     db: DBSessionDep,
-) -> dict:
-    """Verify a user's email using the token from the verification email."""
+):
+    """Verify a user's email and redirect to login page."""
+    from core.config import get_settings
     try:
         user = await verify_email(db=db, token=token)
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
 
-    return {"message": "Email verified successfully", "email": user.email}
+    # Redirect to frontend with success message
+    base_url = get_settings().base_url or ""
+    return RedirectResponse(url=f"{base_url}/?email_verified=1")
 
 
 @router.get("/approve-user")

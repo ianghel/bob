@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import jwt as pyjwt
 
-from core.auth.email import send_admin_approval_email, send_password_reset_email, send_verification_email
+from core.auth.email import send_password_reset_email, send_verification_email
 from core.auth.jwt import create_access_token, create_approval_token, decode_approval_token
 from core.database.models import Tenant, User
 from core.tenant.service import create_tenant, generate_random_slug
@@ -76,20 +76,7 @@ async def register(
     except Exception:
         logger.warning("Could not send verification email to %s", email)
 
-    # Send admin approval email
-    try:
-        approval_token = create_approval_token(user_id=user.id)
-        await send_admin_approval_email(
-            user_email=email,
-            user_name=name,
-            tenant_name=tenant_name,
-            token=approval_token,
-            base_url=_BASE_URL,
-        )
-    except Exception:
-        logger.warning("Could not send admin approval email for %s", email)
-
-    logger.info("User registered (pending approval): %s (tenant=%s)", email, tenant.slug)
+    logger.info("User registered (pending email verification): %s (tenant=%s)", email, tenant.slug)
     return user
 
 
@@ -111,7 +98,7 @@ async def login(
         raise AuthError("Account is deactivated", 403)
 
     if not user.is_approved:
-        raise AuthError("Account is pending admin approval", 403)
+        raise AuthError("Please verify your email address before logging in", 403)
 
     # Look up tenant slug for the frontend
     tenant_stmt = select(Tenant).where(Tenant.id == user.tenant_id)
@@ -132,11 +119,12 @@ async def verify_email(db: AsyncSession, token: str) -> User:
         raise AuthError("Invalid verification token", 400)
 
     user.email_verified = True
+    user.is_approved = True
     user.verification_token = None
     await db.commit()
     await db.refresh(user)
 
-    logger.info("Email verified for user %s", user.email)
+    logger.info("Email verified and account approved for user %s", user.email)
     return user
 
 

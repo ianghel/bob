@@ -92,7 +92,8 @@ class Settings(BaseSettings):
     web_search_max_results: int = 5
     serper_api_key: str = ""
 
-    # -- Whisper (Speech-to-Text) ---------------------------------------------
+    # -- Speech-to-Text -------------------------------------------------------
+    stt_provider: str = "whisper"  # "whisper" or "transcribe" (AWS Transcribe)
     whisper_base_url: str = ""
     whisper_api_key: str = ""
 

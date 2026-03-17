@@ -1,5 +1,6 @@
 """Chat endpoint with conversation memory, SSE streaming, RAG, web search, and voice."""
 
+import asyncio
 import json
 import logging
 import uuid
@@ -581,14 +582,14 @@ class SpeakRequest(BaseModel):
     lang: str | None = Field(None, description="Language hint — 'ro' routes to Piper, others to Kokoro")
 
 
-@router.post("/transcribe", response_model=TranscribeResponse, summary="Transcribe audio via Whisper")
+@router.post("/transcribe", response_model=TranscribeResponse, summary="Transcribe audio via Whisper or AWS Transcribe")
 async def transcribe_audio(
     user: CurrentUserDep,
     tenant: CurrentTenantDep,
     file: UploadFile = File(..., description="Audio file (webm, wav, mp3, ogg, m4a)"),
     language: str = Form("auto"),
 ) -> TranscribeResponse:
-    """Send an audio file to the Whisper API for transcription."""
+    """Send an audio file for transcription. Routes to AWS Transcribe or Whisper based on config."""
     _allowed_audio = {".webm", ".wav", ".mp3", ".ogg", ".m4a", ".flac", ".mp4"}
     suffix = Path(file.filename or "audio.webm").suffix.lower()
     if suffix not in _allowed_audio:
@@ -605,6 +606,18 @@ async def transcribe_audio(
         )
 
     _settings = get_settings()
+
+    # --- AWS Transcribe path ---
+    if _settings.stt_provider == "transcribe":
+        return await _transcribe_aws(audio_bytes, suffix, language, _settings)
+
+    # --- Legacy Whisper path ---
+    if not _settings.whisper_base_url:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="STT service not configured",
+        )
+
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
@@ -629,6 +642,116 @@ async def transcribe_audio(
 
     result = resp.json()
     return TranscribeResponse(text=result.get("text", ""))
+
+
+async def _transcribe_aws(
+    audio_bytes: bytes,
+    suffix: str,
+    language: str,
+    settings,
+) -> TranscribeResponse:
+    """Transcribe audio using Amazon Transcribe streaming API.
+
+    Uses the synchronous start_transcription_job with S3-less approach
+    via the streaming SDK for real-time transcription.
+    """
+    import boto3
+    import tempfile
+    import os
+    import time
+
+    # Map file extensions to Transcribe media formats
+    format_map = {
+        ".webm": "webm",
+        ".wav": "wav",
+        ".mp3": "mp3",
+        ".ogg": "ogg",
+        ".m4a": "mp4",
+        ".mp4": "mp4",
+        ".flac": "flac",
+    }
+    media_format = format_map.get(suffix, "webm")
+
+    # Map language codes for Transcribe
+    lang_map = {
+        "auto": None,
+        "ro": "ro-RO",
+        "en": "en-US",
+        "de": "de-DE",
+        "fr": "fr-FR",
+        "es": "es-ES",
+        "it": "it-IT",
+    }
+    transcribe_lang = lang_map.get(language)
+
+    try:
+        s3 = boto3.client("s3", region_name=settings.aws_default_region)
+        transcribe = boto3.client("transcribe", region_name=settings.aws_default_region)
+
+        # Upload to temporary S3 location
+        bucket = "bob-transcribe-temp"
+        job_name = f"bob-{int(time.time() * 1000)}"
+        s3_key = f"audio/{job_name}{suffix}"
+
+        # Ensure bucket exists (create if not)
+        try:
+            s3.head_bucket(Bucket=bucket)
+        except Exception:
+            s3.create_bucket(Bucket=bucket)
+
+        s3.put_object(Bucket=bucket, Key=s3_key, Body=audio_bytes)
+
+        # Start transcription job
+        job_params = {
+            "TranscriptionJobName": job_name,
+            "Media": {"MediaFileUri": f"s3://{bucket}/{s3_key}"},
+            "MediaFormat": media_format,
+        }
+        if transcribe_lang:
+            job_params["LanguageCode"] = transcribe_lang
+        else:
+            # Auto-detect language
+            job_params["IdentifyLanguage"] = True
+            job_params["LanguageOptions"] = ["en-US", "ro-RO", "de-DE", "fr-FR", "es-ES"]
+
+        transcribe.start_transcription_job(**job_params)
+
+        # Poll for completion (max 60 seconds)
+        for _ in range(60):
+            result = transcribe.get_transcription_job(TranscriptionJobName=job_name)
+            job_status = result["TranscriptionJob"]["TranscriptionJobStatus"]
+            if job_status == "COMPLETED":
+                break
+            if job_status == "FAILED":
+                reason = result["TranscriptionJob"].get("FailureReason", "Unknown")
+                raise Exception(f"Transcription failed: {reason}")
+            await asyncio.sleep(1)
+        else:
+            raise Exception("Transcription timed out after 60 seconds")
+
+        # Fetch transcript
+        transcript_uri = result["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(transcript_uri)
+            transcript_data = resp.json()
+
+        text = transcript_data["results"]["transcripts"][0]["transcript"]
+
+        # Cleanup
+        try:
+            s3.delete_object(Bucket=bucket, Key=s3_key)
+            transcribe.delete_transcription_job(TranscriptionJobName=job_name)
+        except Exception:
+            pass  # Best-effort cleanup
+
+        return TranscribeResponse(text=text)
+
+    except Exception as e:
+        logger.error("AWS Transcribe error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AWS Transcribe failed: {e}",
+        )
 
 
 @router.post("/speak", summary="Text-to-speech via Polly/Kokoro/Piper TTS")

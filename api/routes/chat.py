@@ -842,13 +842,20 @@ async def _speak_polly(body: SpeakRequest, settings) -> "Response":
     import boto3
     from fastapi.responses import Response
 
+    # Valid Polly voice IDs — ignore non-Polly voices from frontend (e.g. Piper/Kokoro names)
+    _polly_voices = {
+        "Ruth", "Danielle", "Joanna", "Kendra", "Ivy", "Salli", "Kimberly", "Amy", "Emma",
+        "Brian", "Matthew", "Joey", "Stephen", "Kevin", "Justin", "Gregory", "Arthur",
+        "Carmen", "Bianca", "Liam", "Olivia", "Aria", "Adriano", "Laura", "Pedro",
+    }
+
     # Select voice and engine based on language
     if body.lang == "ro":
-        voice_id = body.voice or settings.polly_voice_id_ro
+        voice_id = body.voice if body.voice in _polly_voices else settings.polly_voice_id_ro
         language_code = "ro-RO"
         engine = settings.polly_engine_ro  # Romanian: standard only
     else:
-        voice_id = body.voice or settings.polly_voice_id
+        voice_id = body.voice if body.voice in _polly_voices else settings.polly_voice_id
         language_code = None  # Let Polly auto-detect from voice
         engine = settings.polly_engine  # English: generative
 

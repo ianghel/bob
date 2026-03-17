@@ -769,8 +769,11 @@ async def speak_text(
     """
     _settings = get_settings()
 
-    # --- AWS Polly path ---
+    # --- AWS Polly path (English) / Piper path (Romanian) ---
     if _settings.tts_provider == "polly":
+        # Use Piper for Romanian if available — much more natural voice
+        if body.lang == "ro" and _settings.piper_base_url:
+            return await _speak_piper(body, _settings)
         return await _speak_polly(body, _settings)
 
     # --- Legacy Kokoro/Piper path ---
@@ -886,6 +889,47 @@ async def _speak_polly(body: SpeakRequest, settings) -> "Response":
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"AWS Polly synthesis failed: {e}",
         )
+
+
+async def _speak_piper(body: SpeakRequest, settings) -> "Response":
+    """Synthesize Romanian speech using local Piper TTS server."""
+    from fastapi.responses import Response
+
+    voice = body.voice if body.voice and body.voice.startswith("ro") else settings.piper_voice
+    payload = {
+        "model": settings.piper_model,
+        "input": body.text,
+        "voice": voice,
+        "response_format": "mp3",
+    }
+
+    base_url = settings.piper_base_url
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{base_url}/audio/speech",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("Piper TTS API error: %s — %s", e.response.status_code, e.response.text)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Piper TTS synthesis failed: {e.response.text}",
+        )
+    except Exception as e:
+        logger.error("Piper TTS connection error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not reach Piper TTS service: {e}",
+        )
+
+    return Response(
+        content=resp.content,
+        media_type="audio/mpeg",
+        headers={"Content-Disposition": "inline; filename=speech.mp3"},
+    )
 
 
 # NOTE: /sessions MUST come before /{session_id}/* routes to avoid

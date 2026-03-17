@@ -10,6 +10,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -122,7 +123,7 @@ class AgentRun(Base):
 
 
 class EmailAccount(Base):
-    """OAuth-connected email account (per user, multi-tenant)."""
+    """Email account — Gmail (OAuth) or generic IMAP/SMTP (per user, multi-tenant)."""
     __tablename__ = "email_accounts"
     __table_args__ = (
         UniqueConstraint("user_id", "provider", "email_address", name="uq_user_provider_email"),
@@ -131,12 +132,23 @@ class EmailAccount(Base):
     id = Column(String(36), primary_key=True, default=_uuid)
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
-    provider = Column(String(20), nullable=False, default="gmail")  # gmail | yahoo | outlook
+    provider = Column(String(20), nullable=False, default="gmail")  # gmail | imap
     email_address = Column(String(255), nullable=False)
+    display_name = Column(String(255), nullable=True)  # friendly name shown in sidebar
+
+    # OAuth fields (Gmail)
     access_token = Column(Text, nullable=True)
     refresh_token = Column(Text, nullable=True)
     token_expires_at = Column(DateTime, nullable=True)
     scopes = Column(Text, nullable=True)
+
+    # IMAP/SMTP fields (generic email)
+    imap_host = Column(String(255), nullable=True)
+    imap_port = Column(Integer, nullable=True, default=993)
+    smtp_host = Column(String(255), nullable=True)
+    smtp_port = Column(Integer, nullable=True, default=465)
+    imap_password = Column(Text, nullable=True)  # stored for IMAP/SMTP auth
+
     is_active = Column(Boolean, default=True, nullable=False)
     last_sync_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
@@ -156,6 +168,7 @@ class EmailDigest(Base):
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(String(36), ForeignKey("email_accounts.id", ondelete="SET NULL"), nullable=True, index=True)
     message_id = Column(String(255), nullable=False, unique=True, index=True)
     source = Column(String(20), nullable=False, default="gmail")
     sender = Column(String(500), nullable=False)
@@ -188,4 +201,26 @@ class ApiToken(Base):
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     user = relationship("User", back_populates="api_tokens")
+    tenant = relationship("Tenant")
+
+
+class Contact(Base):
+    """Known email contact — auto-extracted from emails or manually added via chat.
+
+    Contacts are permanent and never auto-deleted.
+    """
+    __tablename__ = "contacts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "email", name="uq_user_contact_email"),
+    )
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    email = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=True)
+    source = Column(String(20), nullable=False, default="email")  # email | chat | manual
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    user = relationship("User")
     tenant = relationship("Tenant")

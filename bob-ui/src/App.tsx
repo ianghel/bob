@@ -1,23 +1,21 @@
-import { useState, useEffect, useMemo } from 'react'
-import { MessageSquare, BookOpen, Mail, Bot, Settings, Wifi, WifiOff, LogOut } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { MessageSquare, BookOpen, Mail, Settings, Wifi, WifiOff, LogOut } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useSettings } from './store/settings'
 import { useAuth } from './store/auth'
 import { healthCheck } from './api/client'
 import ChatPanel from './components/chat/ChatPanel'
 import RAGPanel from './components/rag/RAGPanel'
-import AgentPanel from './components/agent/AgentPanel'
 import SettingsPanel from './components/settings/SettingsPanel'
 import EmailPanel from './components/email/EmailPanel'
 import LoginPage from './components/auth/LoginPage'
 
-type Tab = 'chat' | 'rag' | 'email' | 'agent' | 'settings'
+type Tab = 'chat' | 'rag' | 'email' | 'settings'
 
-const BASE_TABS = [
+const TABS = [
   { id: 'chat' as Tab, label: 'Chat', icon: MessageSquare },
   { id: 'rag' as Tab, label: 'Knowledge', icon: BookOpen },
   { id: 'email' as Tab, label: 'Email', icon: Mail },
-  { id: 'agent' as Tab, label: 'Agent', icon: Bot },
   { id: 'settings' as Tab, label: 'Settings', icon: Settings },
 ]
 
@@ -26,13 +24,6 @@ export default function App() {
   const [online, setOnline] = useState<boolean | null>(null)
   const { settings } = useSettings()
   const { isAuthenticated, auth, logout } = useAuth()
-
-  // Only show Email tab for Gmail users
-  const isGmail = auth.user?.email?.toLowerCase().endsWith('@gmail.com') ?? false
-  const TABS = useMemo(
-    () => (isGmail ? BASE_TABS : BASE_TABS.filter(t => t.id !== 'email')),
-    [isGmail],
-  )
 
   useEffect(() => {
     const check = () =>
@@ -128,7 +119,6 @@ export default function App() {
           {tab === 'chat' && <ChatPanel />}
           {tab === 'rag' && <RAGPanel />}
           {tab === 'email' && <EmailPanel />}
-          {tab === 'agent' && <AgentPanel />}
           {tab === 'settings' && <SettingsPanel />}
         </div>
 

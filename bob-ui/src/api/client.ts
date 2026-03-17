@@ -115,7 +115,13 @@ export interface DocumentInfo {
   document_id: string
   source: string
   format: string
+  source_type: string  // "file" | "email"
   chunk_count: number
+  sender?: string
+  subject?: string
+  received_at?: string
+  indexed_at?: string
+  email_account?: string
 }
 
 export interface ToolCall {
@@ -406,13 +412,22 @@ export async function ingestFile(file: File, settings: Settings, auth: AuthHeade
   return res.json()
 }
 
-export async function listDocuments(settings: Settings, auth: AuthHeaders): Promise<DocumentInfo[]> {
-  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/rag/documents`, {
+export async function listDocuments(
+  settings: Settings,
+  auth: AuthHeaders,
+  opts?: { sourceType?: string; search?: string; limit?: number; offset?: number },
+): Promise<{ documents: DocumentInfo[]; total: number }> {
+  const params = new URLSearchParams()
+  if (opts?.sourceType) params.set('source_type', opts.sourceType)
+  if (opts?.search) params.set('search', opts.search)
+  if (opts?.limit) params.set('limit', String(opts.limit))
+  if (opts?.offset) params.set('offset', String(opts.offset))
+  const qs = params.toString()
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/rag/documents${qs ? `?${qs}` : ''}`, {
     headers: authHeadersNoBody(auth),
   }))
   if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
-  const data = await res.json()
-  return data.documents
+  return res.json()
 }
 
 export async function deleteDocument(documentId: string, settings: Settings, auth: AuthHeaders): Promise<void> {
@@ -495,8 +510,17 @@ export async function revokeApiToken(
 
 // ── Email ─────────────────────────────────────────────────────────────────
 
+export interface EmailAccountInfo {
+  id: string
+  provider: 'gmail' | 'imap'
+  email: string
+  display_name: string
+  last_sync: string | null
+}
+
 export interface EmailConnections {
   gmail: { connected: boolean; email: string | null; can_connect: boolean }
+  accounts: EmailAccountInfo[]
 }
 
 export async function getEmailConnections(
@@ -526,6 +550,43 @@ export async function disconnectGmail(
   auth: AuthHeaders,
 ): Promise<void> {
   const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/disconnect/gmail`, {
+    method: 'POST',
+    headers: authHeadersNoBody(auth),
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+}
+
+export interface ImapConnectPayload {
+  email_address: string
+  display_name: string
+  imap_host: string
+  imap_port: number
+  smtp_host: string
+  smtp_port: number
+  password: string
+}
+
+export async function connectImap(
+  payload: ImapConnectPayload,
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<{ message: string; email: string }> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/connect/imap`, {
+    method: 'POST',
+    headers: authHeaders(auth),
+    body: JSON.stringify(payload),
+    timeoutMs: 30_000,
+  }))
+  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText)
+  return res.json()
+}
+
+export async function disconnectAccount(
+  accountId: string,
+  settings: Settings,
+  auth: AuthHeaders,
+): Promise<void> {
+  const res = check401(await fetchWithTimeout(`${settings.baseUrl}/api/v1/email/disconnect/${accountId}`, {
     method: 'POST',
     headers: authHeadersNoBody(auth),
   }))

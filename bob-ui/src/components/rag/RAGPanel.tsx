@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, Search, FileText, File, Loader2, ChevronDown, ChevronUp, BookOpen, Trash2 } from 'lucide-react'
+import { Upload, Search, FileText, File, Loader2, ChevronDown, ChevronUp, BookOpen, Trash2, Mail, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import ReactMarkdown from 'react-markdown'
 import { useSettings } from '../../store/settings'
@@ -7,32 +7,66 @@ import { useAuth } from '../../store/auth'
 import { ingestFile, ragQuery, listDocuments, deleteDocument } from '../../api/client'
 import type { DocumentInfo, RAGQueryResponse, AuthHeaders } from '../../api/client'
 
+const PAGE_SIZE = 10
+
 export default function RAGPanel() {
   const { settings } = useSettings()
   const { auth } = useAuth()
   const authHeaders: AuthHeaders = { token: auth.token!, tenantSlug: auth.tenantSlug! }
+
+  // Documents state
   const [docs, setDocs] = useState<DocumentInfo[]>([])
   const [loadingDocs, setLoadingDocs] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadMsg, setUploadMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  // Emails state
+  const [emails, setEmails] = useState<DocumentInfo[]>([])
+  const [emailTotal, setEmailTotal] = useState(0)
+  const [emailPage, setEmailPage] = useState(0)
+  const [emailSearch, setEmailSearch] = useState('')
+  const [emailSearchInput, setEmailSearchInput] = useState('')
+  const [loadingEmails, setLoadingEmails] = useState(false)
+
+  // Query state
   const [query, setQuery] = useState('')
   const [querying, setQuerying] = useState(false)
   const [result, setResult] = useState<RAGQueryResponse | null>(null)
   const [queryError, setQueryError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Fetch file documents (no source_type filter excludes emails — we filter client-side)
   const refreshDocs = useCallback(async () => {
     setLoadingDocs(true)
     try {
-      setDocs(await listDocuments(settings, authHeaders))
+      const data = await listDocuments(settings, authHeaders, { limit: 200 })
+      setDocs(data.documents.filter(d => d.source_type !== 'email'))
     } catch { /* ignore */ } finally {
       setLoadingDocs(false)
     }
   }, [settings, auth.token])
 
+  // Fetch email documents
+  const refreshEmails = useCallback(async () => {
+    setLoadingEmails(true)
+    try {
+      const data = await listDocuments(settings, authHeaders, {
+        sourceType: 'email',
+        search: emailSearch || undefined,
+        limit: PAGE_SIZE,
+        offset: emailPage * PAGE_SIZE,
+      })
+      setEmails(data.documents)
+      setEmailTotal(data.total)
+    } catch { /* ignore */ } finally {
+      setLoadingEmails(false)
+    }
+  }, [settings, auth.token, emailSearch, emailPage])
+
   useEffect(() => { refreshDocs() }, [refreshDocs])
+  useEffect(() => { refreshEmails() }, [refreshEmails])
 
   const handleFiles = async (files: FileList | File[]) => {
     const arr = Array.from(files)
@@ -67,6 +101,7 @@ export default function RAGPanel() {
     try {
       await deleteDocument(documentId, settings, authHeaders)
       refreshDocs()
+      refreshEmails()
     } catch { /* ignore */ } finally {
       setDeletingId(null)
     }
@@ -86,6 +121,13 @@ export default function RAGPanel() {
     }
   }
 
+  const handleEmailSearch = () => {
+    setEmailPage(0)
+    setEmailSearch(emailSearchInput.trim())
+  }
+
+  const totalPages = Math.max(1, Math.ceil(emailTotal / PAGE_SIZE))
+
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6 max-w-3xl mx-auto">
       {/* Header */}
@@ -95,7 +137,7 @@ export default function RAGPanel() {
         </div>
         <div>
           <h1 className="text-base font-semibold text-gray-100">Knowledge Base</h1>
-          <p className="text-xs text-gray-500">Upload documents and query with RAG</p>
+          <p className="text-xs text-gray-500">Documents, emails, and semantic search</p>
         </div>
       </div>
 
@@ -149,7 +191,7 @@ export default function RAGPanel() {
       <div>
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-medium text-gray-300">
-            Ingested documents
+            Documents
             {docs.length > 0 && (
               <span className="ml-2 badge bg-surface-700 text-gray-400">{docs.length}</span>
             )}
@@ -189,6 +231,95 @@ export default function RAGPanel() {
         )}
       </div>
 
+      {/* Indexed Emails */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-medium text-gray-300 flex items-center gap-2">
+            <Mail size={14} className="text-indigo-400" />
+            Indexed Emails
+            {emailTotal > 0 && (
+              <span className="badge bg-surface-700 text-gray-400">{emailTotal}</span>
+            )}
+          </h2>
+          <button onClick={refreshEmails} className="btn-ghost text-xs py-1 px-2">
+            {loadingEmails ? <Loader2 size={12} className="animate-spin" /> : 'Refresh'}
+          </button>
+        </div>
+
+        {/* Email search */}
+        <div className="flex gap-2 mb-3">
+          <input
+            value={emailSearchInput}
+            onChange={e => setEmailSearchInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleEmailSearch()}
+            placeholder="Search emails by sender, subject…"
+            className="input flex-1 text-sm"
+          />
+          <button onClick={handleEmailSearch} className="btn-ghost flex-shrink-0 px-3">
+            <Search size={14} />
+          </button>
+        </div>
+
+        {emails.length === 0 ? (
+          <p className="text-xs text-gray-600 text-center py-6 card">
+            {emailSearch ? 'No emails match your search.' : 'No indexed emails yet. Sync emails to index them.'}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {emails.map(doc => (
+              <div key={doc.document_id} className="card flex items-center gap-3 py-3">
+                <div className="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center flex-shrink-0">
+                  <Mail size={14} className="text-indigo-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-200 truncate font-medium">{doc.subject || '(no subject)'}</p>
+                  <p className="text-xs text-gray-500 truncate">
+                    {doc.sender}
+                    {doc.email_account && <span className="ml-1 text-gray-600">· {doc.email_account}</span>}
+                  </p>
+                  {doc.received_at && (
+                    <p className="text-[10px] text-gray-600">{formatDate(doc.received_at)}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleDelete(doc.document_id)}
+                  disabled={deletingId === doc.document_id}
+                  className="p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-900/20 transition-colors disabled:opacity-40"
+                  title="Remove from knowledge base"
+                >
+                  {deletingId === doc.document_id
+                    ? <Loader2 size={14} className="animate-spin" />
+                    : <Trash2 size={14} />}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {emailTotal > PAGE_SIZE && (
+          <div className="flex items-center justify-center gap-3 mt-3">
+            <button
+              onClick={() => setEmailPage(p => Math.max(0, p - 1))}
+              disabled={emailPage === 0}
+              className="btn-ghost p-1.5 disabled:opacity-30"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span className="text-xs text-gray-500">
+              {emailPage + 1} / {totalPages}
+            </span>
+            <button
+              onClick={() => setEmailPage(p => Math.min(totalPages - 1, p + 1))}
+              disabled={emailPage >= totalPages - 1}
+              className="btn-ghost p-1.5 disabled:opacity-30"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Query */}
       <div>
         <h2 className="text-sm font-medium text-gray-300 mb-2">Query knowledge base</h2>
@@ -197,7 +328,7 @@ export default function RAGPanel() {
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && search()}
-            placeholder="Ask a question about your documents…"
+            placeholder="Ask about your documents or emails…"
             className="input flex-1"
           />
           <button onClick={search} disabled={!query.trim() || querying} className="btn-primary flex-shrink-0">
@@ -215,6 +346,15 @@ export default function RAGPanel() {
       {result && <RAGResult result={result} />}
     </div>
   )
+}
+
+function formatDate(iso: string): string {
+  try {
+    const d = new Date(iso)
+    return d.toLocaleDateString('ro-RO', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return iso
+  }
 }
 
 function RAGResult({ result }: { result: RAGQueryResponse }) {

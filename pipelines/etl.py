@@ -44,6 +44,7 @@ class ETLStats:
 
 async def run_etl(
     source_dir: Path,
+    tenant_id: str,
     chunk_size: int = 512,
     chunk_overlap: int = 50,
     recursive: bool = True,
@@ -85,9 +86,10 @@ async def run_etl(
         return stats
 
     logger.info(
-        "ETL starting: %d files discovered in %s (dry_run=%s)",
+        "ETL starting: %d files discovered in %s (tenant=%s, dry_run=%s)",
         len(all_files),
         source_dir,
+        tenant_id,
         dry_run,
     )
 
@@ -103,7 +105,7 @@ async def run_etl(
     for i, file_path in enumerate(all_files, 1):
         logger.info("[%d/%d] Ingesting %s ...", i, len(all_files), file_path.name)
         try:
-            result = await ingestion.ingest_file(file_path)
+            result = await ingestion.ingest_file(file_path, tenant_id=tenant_id)
             stats.processed += 1
             stats.total_chunks += result.chunks
             logger.info(
@@ -143,6 +145,11 @@ def main() -> None:
         help="Directory containing documents to ingest (default: ./data/sample_docs)",
     )
     parser.add_argument(
+        "--tenant-id",
+        required=True,
+        help="Tenant ID to associate ingested documents with (required for tenant isolation)",
+    )
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=512,
@@ -171,6 +178,7 @@ def main() -> None:
     stats = asyncio.run(
         run_etl(
             source_dir=source_path,
+            tenant_id=args.tenant_id,
             chunk_size=args.chunk_size,
             chunk_overlap=args.chunk_overlap,
             recursive=not args.no_recursive,

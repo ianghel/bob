@@ -13,7 +13,7 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
-from core.database.models import EmailAccount, EmailDigest
+from core.database.models import Contact, EmailAccount, EmailDigest
 from core.email.gmail import send_email
 
 logger = logging.getLogger(__name__)
@@ -94,14 +94,17 @@ EMAIL_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Send an email on behalf of the user via their connected Gmail. "
                 "Use this when the user explicitly asks to send, write, or reply to an email. "
-                "Always confirm the recipient and content before sending."
+                "IMPORTANT: Before sending, always call list_contacts to verify the recipient "
+                "email address exists in the contact list. If the address is NOT in the contact "
+                "list, warn the user that this is an unknown address and ask for explicit "
+                "confirmation before sending. Never guess or hallucinate email addresses."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "to": {
                         "type": "string",
-                        "description": "Recipient email address",
+                        "description": "Recipient email address — must be verified against contacts",
                     },
                     "subject": {
                         "type": "string",
@@ -111,8 +114,62 @@ EMAIL_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Email body text",
                     },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Set to true to send even if address is not in contacts (user confirmed)",
+                    },
                 },
                 "required": ["to", "subject", "body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_contacts",
+            "description": (
+                "List the user's known email contacts. Use this to look up email addresses "
+                "before sending an email — never guess addresses. Can search by name or email. "
+                "Also use when the user asks 'who are my contacts', 'what email does X have', etc."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search by name or email address (optional — returns all if empty)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default: 50)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_contact",
+            "description": (
+                "Save an email address as a permanent contact. Use this when the user "
+                "explicitly provides an email address in chat that they want to remember, "
+                "e.g. 'email-ul lui Ion este ion@example.com'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email": {
+                        "type": "string",
+                        "description": "Email address to save",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Contact name (optional)",
+                    },
+                },
+                "required": ["email"],
             },
         },
     },
@@ -224,8 +281,25 @@ def make_email_tool_executor(db: AsyncSession, user_id: str, tenant_id: str):
 
         return "\n".join(parts)
 
-    async def send_email_tool(to: str, subject: str, body: str) -> str:
+    async def send_email_tool(to: str, subject: str, body: str, force: bool = False) -> str:
         settings = get_settings()
+
+        # Check if recipient is a known contact
+        contact_result = await db.execute(
+            select(Contact).where(
+                Contact.user_id == user_id,
+                Contact.email == to.lower().strip(),
+            )
+        )
+        known_contact = contact_result.scalar_one_or_none()
+
+        if not known_contact and not force:
+            return (
+                f"⚠️ ATENȚIE: Adresa '{to}' NU se află în lista ta de contacte. "
+                f"Nu am găsit-o în emailurile tale anterioare. "
+                f"Ești sigur că vrei să trimiți la această adresă? "
+                f"Confirmă și voi trimite, sau verifică adresa."
+            )
 
         # Get user's Gmail account
         result = await db.execute(
@@ -271,17 +345,92 @@ def make_email_tool_executor(db: AsyncSession, user_id: str, tenant_id: str):
                 received_at=now,
             )
             db.add(sent_digest)
+
+            # Also save the recipient as a contact if not already known
+            if not known_contact:
+                db.add(Contact(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    email=to.lower().strip(),
+                    source="chat",
+                ))
+
             await db.commit()
             return f"Email sent successfully to {to} with subject: {subject}"
         except Exception as e:
             logger.error("send_email tool failed: %s", e)
             return f"Failed to send email: {e}"
 
+    async def list_contacts_tool(query: str = "", limit: int = 50) -> str:
+        stmt = (
+            select(Contact)
+            .where(Contact.user_id == user_id)
+            .order_by(Contact.name, Contact.email)
+            .limit(min(limit, 200))
+        )
+
+        if query:
+            like = f"%{query}%"
+            stmt = stmt.where(
+                or_(
+                    Contact.email.ilike(like),
+                    Contact.name.ilike(like),
+                )
+            )
+
+        result = await db.execute(stmt)
+        contacts = result.scalars().all()
+
+        if not contacts:
+            if query:
+                return f"No contacts found matching '{query}'."
+            return "No contacts yet. Contacts are automatically added when you sync emails."
+
+        lines = []
+        for c in contacts:
+            name_part = f" ({c.name})" if c.name else ""
+            source_part = f" [{c.source}]" if c.source != "email" else ""
+            lines.append(f"- {c.email}{name_part}{source_part}")
+
+        return f"Found {len(contacts)} contacts:\n" + "\n".join(lines)
+
+    async def save_contact_tool(email: str, name: str = "") -> str:
+        addr = email.lower().strip()
+        if "@" not in addr:
+            return f"Invalid email address: {email}"
+
+        existing = await db.execute(
+            select(Contact).where(
+                Contact.user_id == user_id,
+                Contact.email == addr,
+            )
+        )
+        contact = existing.scalar_one_or_none()
+
+        if contact:
+            if name and not contact.name:
+                contact.name = name
+                await db.commit()
+                return f"Updated contact {addr} with name '{name}'."
+            return f"Contact {addr} already exists."
+
+        db.add(Contact(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            email=addr,
+            name=name or None,
+            source="chat",
+        ))
+        await db.commit()
+        return f"Contact saved: {addr}" + (f" ({name})" if name else "")
+
     # Registry
     _registry = {
         "search_emails": search_emails,
         "get_email_summary": get_email_summary,
         "send_email": send_email_tool,
+        "list_contacts": list_contacts_tool,
+        "save_contact": save_contact_tool,
     }
 
     async def execute(name: str, arguments: str | dict) -> str:

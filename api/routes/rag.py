@@ -210,15 +210,28 @@ async def list_documents(
     user: CurrentUserDep,
     limit: int = Query(50, ge=1, le=200, description="Max documents to return"),
     offset: int = Query(0, ge=0, description="Number of documents to skip"),
+    source_type: Optional[str] = Query(None, description="Filter by source_type: 'email' or 'file'"),
+    search: Optional[str] = Query(None, description="Search filter on source/subject/sender"),
 ) -> DocumentListResponse:
     """List documents in the current tenant's knowledge base (paginated)."""
     try:
-        all_documents = retriever.list_documents(tenant_id=tenant.id)
+        all_documents = retriever.list_documents(tenant_id=tenant.id, source_type=source_type)
     except Exception as e:
         logger.error("Failed to list documents: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list documents: {e}",
         )
+
+    # Client-side search filter (ChromaDB doesn't support LIKE queries on metadata)
+    if search:
+        q = search.lower()
+        all_documents = [
+            d for d in all_documents
+            if q in d.get("source", "").lower()
+            or q in d.get("subject", "").lower()
+            or q in d.get("sender", "").lower()
+        ]
+
     page = all_documents[offset : offset + limit]
     return DocumentListResponse(documents=page, total=len(all_documents))

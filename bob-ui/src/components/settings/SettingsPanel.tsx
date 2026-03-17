@@ -1,14 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Settings, RotateCcw, CheckCircle2, XCircle, Loader2, Key, Plus, Copy, Trash2, ExternalLink, LogOut } from 'lucide-react'
+import { Settings, RotateCcw, CheckCircle2, Loader2, Key, Plus, Copy, Trash2, ExternalLink, LogOut } from 'lucide-react'
 import { useSettings } from '../../store/settings'
 import { useAuth } from '../../store/auth'
-import { healthCheck, createApiToken, listApiTokens, revokeApiToken, ApiTokenInfo } from '../../api/client'
+import { createApiToken, listApiTokens, revokeApiToken, ApiTokenInfo } from '../../api/client'
 
 export default function SettingsPanel() {
   const { settings, update, reset } = useSettings()
   const { auth, logout } = useAuth()
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<boolean | null>(null)
   const [saved, setSaved] = useState(false)
 
   // API Tokens state
@@ -19,14 +17,6 @@ export default function SettingsPanel() {
   const [newlyCreatedToken, setNewlyCreatedToken] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [tokenError, setTokenError] = useState<string | null>(null)
-
-  const test = async () => {
-    setTesting(true)
-    setTestResult(null)
-    const ok = await healthCheck(settings.baseUrl || '')
-    setTestResult(ok)
-    setTesting(false)
-  }
 
   const save = () => {
     setSaved(true)
@@ -258,56 +248,6 @@ export default function SettingsPanel() {
             </div>
           </div>
         )}
-      </section>
-
-      {/* Connection */}
-      <section className="card space-y-4">
-        <h2 className="text-sm font-semibold text-gray-200">API Connection</h2>
-
-        <div>
-          <label className="text-xs text-gray-400 mb-1.5 block">Base URL</label>
-          <input
-            value={settings.baseUrl}
-            onChange={e => update({ baseUrl: e.target.value })}
-            placeholder="Leave empty to use Vite proxy (http://localhost:8000)"
-            className="input"
-          />
-          <p className="text-xs text-gray-600 mt-1">
-            Leave empty when running the UI dev server — requests are proxied to <code className="text-gray-500">localhost:8000</code> automatically.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button onClick={test} disabled={testing} className="btn-ghost border border-surface-600 text-sm">
-            {testing ? <Loader2 size={14} className="animate-spin" /> : null}
-            {testing ? 'Testing...' : 'Test connection'}
-          </button>
-          {testResult === true && (
-            <span className="flex items-center gap-1.5 text-emerald-400 text-sm">
-              <CheckCircle2 size={14} /> Connected
-            </span>
-          )}
-          {testResult === false && (
-            <span className="flex items-center gap-1.5 text-red-400 text-sm">
-              <XCircle size={14} /> Failed — check URL
-            </span>
-          )}
-        </div>
-      </section>
-
-      {/* Model */}
-      <section className="card space-y-4">
-        <h2 className="text-sm font-semibold text-gray-200">Model</h2>
-        <div className="space-y-1 text-xs text-gray-400">
-          <p>The active model is configured in the backend <code className="text-gray-300">.env</code> file.</p>
-          <div className="bg-surface-900 rounded-lg p-3 space-y-1 font-mono text-gray-400 border border-surface-700">
-            <p><span className="text-gray-600">LLM_PROVIDER=</span><span className="text-indigo-400">local</span></p>
-            <p><span className="text-gray-600">LOCAL_MODEL_NAME=</span><span className="text-emerald-400">your-model-name</span></p>
-            <p><span className="text-gray-600">LOCAL_MODEL_EMBED_NAME=</span><span className="text-emerald-400">text-embedding-nomic-embed-text-v1.5</span></p>
-            <p><span className="text-gray-600">LOCAL_MODEL_BASE_URL=</span><span className="text-amber-400">http://localhost:1234/v1</span></p>
-          </div>
-          <p className="mt-2">To switch to Bedrock, set <code className="text-gray-300">LLM_PROVIDER=bedrock</code> and add AWS credentials in the .env file, then restart the API server.</p>
-        </div>
       </section>
 
       {/* Behaviour */}

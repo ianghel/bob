@@ -153,8 +153,12 @@ def get_llm_provider() -> BaseLLMProvider:
     if _llm_provider is None:
         settings = get_settings()
         if settings.llm_provider == "bedrock":
-            _llm_provider = BedrockProvider(region=settings.aws_default_region)
-            logger.info("Using BedrockProvider (region=%s)", settings.aws_default_region)
+            _llm_provider = BedrockProvider(
+                region=settings.aws_default_region,
+                chat_model_id=settings.bedrock_chat_model_id,
+                embed_model_id=settings.bedrock_embed_model_id,
+            )
+            logger.info("Using BedrockProvider (region=%s, model=%s)", settings.aws_default_region, settings.bedrock_chat_model_id)
         else:
             _llm_provider = LocalProvider(
                 base_url=settings.local_model_base_url,
@@ -178,7 +182,7 @@ def _build_embedding_function():
     settings = get_settings()
     if settings.llm_provider == "bedrock":
         return BedrockEmbeddings(
-            model_id="amazon.titan-embed-text-v2:0",
+            model_id=settings.bedrock_embed_model_id,
             region_name=settings.aws_default_region,
         )
     return OpenAIEmbeddings(
@@ -232,7 +236,7 @@ def _build_strands_model():
     if settings.llm_provider == "bedrock":
         from strands.models.bedrock import BedrockModel
         return BedrockModel(
-            model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model_id=settings.bedrock_chat_model_id,
             region_name=settings.aws_default_region,
         )
     else:

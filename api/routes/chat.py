@@ -23,7 +23,6 @@ from core.chat.email_tools import EMAIL_TOOL_SCHEMAS, make_email_tool_executor
 from core.chat.web_tools import TOOL_SCHEMAS, execute_tool
 from core.config import get_settings
 from core.llm.base import Message, MessageRole
-from core.llm.local import LocalProvider
 from core.memory.context_manager import ContextManager
 from core.memory.conversation import ConversationMemory, conversation_to_text
 
@@ -190,7 +189,7 @@ async def chat(
     )
 
     _settings2 = get_settings()
-    use_web_tools = request.use_web_search and _settings2.web_search_enabled and isinstance(llm, LocalProvider)
+    use_web_tools = request.use_web_search and _settings2.web_search_enabled
 
     # Email tools are ALWAYS available; web tools only when enabled
     email_executor = make_email_tool_executor(db, user.id, tenant.id)
@@ -198,8 +197,8 @@ async def chat(
     if use_web_tools:
         active_tools += list(TOOL_SCHEMAS)
 
-    # Always enable tool calling (email tools are always useful)
-    use_tools = isinstance(llm, LocalProvider)
+    # Enable tool calling for both LocalProvider and BedrockProvider
+    use_tools = True
 
     async def combined_tool_executor(name: str, arguments) -> str:
         # Try email tools first
@@ -304,7 +303,7 @@ async def _stream_chat(
     tools_used_names: list[str] | None = None
 
     try:
-        if use_tools and isinstance(llm, LocalProvider):
+        if use_tools and hasattr(llm, 'chat_with_tools'):
             # Tool calling: run non-streaming to handle tool round-trips,
             # then emit the final content as SSE chunks.
             yield f"data: {json.dumps({'chunk': '', 'session_id': session_id, 'searching': True})}\n\n"
@@ -632,16 +631,26 @@ async def transcribe_audio(
     return TranscribeResponse(text=result.get("text", ""))
 
 
-@router.post("/speak", summary="Text-to-speech via Kokoro/Piper TTS")
+@router.post("/speak", summary="Text-to-speech via Polly/Kokoro/Piper TTS")
 async def speak_text(
     body: SpeakRequest,
     user: CurrentUserDep,
     tenant: CurrentTenantDep,
 ):
-    """Convert text to speech audio (MP3). Routes to Piper for Romanian, Kokoro for everything else."""
+    """Convert text to speech audio (MP3).
+
+    Provider routing:
+    - tts_provider=polly → AWS Polly (uses Romanian voice for lang=ro)
+    - tts_provider=kokoro → Kokoro (default), Piper fallback for Romanian
+    - tts_provider=piper → Piper only
+    """
     _settings = get_settings()
 
-    # Route: Romanian → Piper (native RO voice), everything else → Kokoro
+    # --- AWS Polly path ---
+    if _settings.tts_provider == "polly":
+        return await _speak_polly(body, _settings)
+
+    # --- Legacy Kokoro/Piper path ---
     use_piper = body.lang == "ro" and _settings.piper_base_url
 
     if use_piper:
@@ -699,6 +708,54 @@ async def speak_text(
         media_type="audio/mpeg",
         headers={"Content-Disposition": "inline; filename=speech.mp3"},
     )
+
+
+async def _speak_polly(body: SpeakRequest, settings) -> "Response":
+    """Synthesize speech using Amazon Polly.
+
+    Automatically selects the Romanian voice (Bianca) when lang=ro,
+    otherwise uses the configured default voice.
+    """
+    import boto3
+    from fastapi.responses import Response
+
+    # Select voice and engine based on language
+    if body.lang == "ro":
+        voice_id = body.voice or settings.polly_voice_id_ro
+        language_code = "ro-RO"
+        engine = settings.polly_engine_ro  # Romanian: standard only
+    else:
+        voice_id = body.voice or settings.polly_voice_id
+        language_code = None  # Let Polly auto-detect from voice
+        engine = settings.polly_engine  # English: generative
+
+    try:
+        polly = boto3.client("polly", region_name=settings.aws_default_region)
+
+        synth_params = {
+            "Text": body.text,
+            "OutputFormat": "mp3",
+            "VoiceId": voice_id,
+            "Engine": engine,
+        }
+        if language_code:
+            synth_params["LanguageCode"] = language_code
+
+        result = polly.synthesize_speech(**synth_params)
+
+        audio_stream = result["AudioStream"].read()
+
+        return Response(
+            content=audio_stream,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "inline; filename=speech.mp3"},
+        )
+    except Exception as e:
+        logger.error("Polly TTS error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"AWS Polly synthesis failed: {e}",
+        )
 
 
 # NOTE: /sessions MUST come before /{session_id}/* routes to avoid

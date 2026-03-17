@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_default_region: str = "us-east-1"
+    bedrock_chat_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    bedrock_embed_model_id: str = "amazon.titan-embed-text-v2:0"
 
     # -- Local Model (LM Studio / OpenAI-compatible) -------------------------
     local_model_base_url: str = "http://localhost:1234/v1"
@@ -105,6 +107,13 @@ class Settings(BaseSettings):
     piper_api_key: str = ""
     piper_model: str = "piper"
     piper_voice: str = "ro_RO-mihai-medium"
+
+    # -- AWS Polly TTS --------------------------------------------------------
+    tts_provider: str = "kokoro"  # "kokoro", "polly", or "piper"
+    polly_voice_id: str = "Ruth"  # Default English generative voice
+    polly_voice_id_ro: str = "Carmen"  # Romanian voice (standard engine only)
+    polly_engine: str = "generative"  # "neural", "generative", or "standard"
+    polly_engine_ro: str = "standard"  # Romanian only supports standard
 
     # -- Google OAuth (Gmail) --------------------------------------------------
     google_client_id: str = ""

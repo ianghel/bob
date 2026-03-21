@@ -7,15 +7,23 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 - **Conversational AI** with persistent session memory and SSE streaming
 - **Web Search** — Bob searches the internet (Google via Serper.dev) for up-to-date info, compares prices, and recommends products
 - **File Upload in Chat** — upload PDF, TXT, MD, DOCX files directly from chat; files are auto-ingested into Bob's memory (knowledge base) and Bob summarizes the content
-- **Voice Input** — record voice messages from the chat UI; audio is transcribed via Whisper (OpenAI-compatible STT server) with auto language detection or manual language selection (RO, EN, DE, FR, ES)
-- **Text-to-Speech** — Bob reads his replies aloud using **Kokoro TTS** (GPU-accelerated, self-hosted); 26 voices (male/female, US/British English); long texts are automatically chunked with pre-fetched playback for seamless narration
+- **Voice Input** — record voice messages from the chat UI; audio is transcribed via **Whisper** or **AWS Transcribe** with auto language detection or manual language selection (RO, EN, DE, FR, ES)
+- **Text-to-Speech** — multiple TTS providers with automatic language routing:
+  - **Kokoro TTS** — GPU-accelerated, self-hosted; 26 voices (male/female, US/British English); chunked playback
+  - **AWS Polly** — cloud-based TTS with generative voices (Ruth, Danielle, etc.)
+  - **Piper TTS** — local, natural-sounding Romanian voice (`ro_RO-mihai-medium`); auto-routed when `lang=ro`
 - **URL Fetching** — Bob can fetch and analyze web pages, saving them to his memory
-- **Gmail Integration** — multi-tenant Gmail OAuth2; each user connects their own Gmail account from the UI. Bob syncs inbox (unread) and sent emails, triages them with LLM (urgency, category, action, reply draft), and displays everything in an Email dashboard. Users can also send emails, reply, and ask Bob about their emails directly from chat.
-- **Email in Chat** — ask Bob "ce emailuri am primit azi?", "trimite un email lui X", or "rezumat emailuri" and he uses tool calls (`send_email`, `search_emails`, `get_email_summary`) to interact with your Gmail
+- **Email Integration** — multi-account support:
+  - **Gmail OAuth2** — each user connects their own Gmail account from the UI
+  - **IMAP/SMTP** — connect any email provider (WorkMail, Outlook, custom servers)
+  - Bob syncs inbox and sent emails, triages them with LLM (urgency, category, action, reply draft), and displays everything in an Email dashboard
+  - **Email indexing in ChromaDB** — email content is semantically searchable via RAG
+  - **Contact list** — auto-extracted from synced emails
+- **Email in Chat** — ask Bob "ce emailuri am primit azi?", "trimite un email lui X", or "rezumat emailuri" and he uses tool calls (`send_email`, `search_emails`, `get_email_summary`) to interact with your email
 - **Background Email Sync** — automatic sync every 10 minutes fetches the latest 20 inbox + 20 sent emails per connected account
 - **RAG** pipeline with ChromaDB vector store for document-grounded answers
 - **Agentic tool use** via Strands Agents (calculator, time, RAG lookup, summarize, email tools)
-- **Multi-tenant auth** with JWT login, user registration, admin approval, and API tokens
+- **Multi-tenant auth** with JWT login, user registration, email verification, and API tokens
 - **Provider abstraction**: Amazon Bedrock or any OpenAI-compatible server (LM Studio, Ollama, vLLM)
 - **React frontend** (Vite + TypeScript + Tailwind)
 - **AWS deployment** via CloudFormation + automated deploy script
@@ -30,8 +38,8 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
 │                                                              │
 │  /api/v1/auth    ──► JWT login / register / approval         │
 │  /api/v1/chat    ──► ConversationMemory ──► LLM + Web Tools   │
-│  /api/v1/chat/transcribe ──► Whisper STT (auto-detect lang)   │
-│  /api/v1/chat/speak      ──► Kokoro TTS (GPU)                │
+│  /api/v1/chat/transcribe ──► Whisper / AWS Transcribe          │
+│  /api/v1/chat/speak      ──► Kokoro / Polly / Piper TTS      │
 │  /api/v1/email   ──► Gmail OAuth ──► Sync + LLM triage       │
 │  /api/v1/rag     ──► ChromaDB ──────────► LLM Provider       │
 │  /api/v1/agent   ──► Strands Agent ─────► LLM Provider       │
@@ -121,6 +129,11 @@ Key settings in `.env`:
 | `TTS_API_KEY` | API key for the TTS server |
 | `TTS_MODEL` | TTS model name (default: `kokoro`) |
 | `TTS_VOICE` | Default TTS voice (default: `af_heart`) |
+| `PIPER_BASE_URL` | Piper TTS server URL (for Romanian voice) |
+| `PIPER_API_KEY` | API key for Piper TTS |
+| `PIPER_VOICE` | Piper voice (default: `ro_RO-mihai-medium`) |
+| `STT_PROVIDER` | `whisper` (default) or `transcribe` (AWS Transcribe) |
+| `TTS_PROVIDER` | `kokoro` (default), `polly`, or `piper` |
 | `GOOGLE_CLIENT_ID` | Google OAuth2 client ID (for Gmail integration) |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth2 client secret |
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL (e.g. `https://your-domain/api/v1/email/callback/gmail`) |
@@ -180,7 +193,7 @@ curl http://localhost:8000/api/v1/auth/me \
   -H "Authorization: Bearer <token>"
 ```
 
-New users require admin approval before they can access the API. The first registered user is auto-approved as admin.
+New users must verify their email address before they can access the API. The first registered user is auto-approved as admin.
 
 ### Chat
 
@@ -225,13 +238,13 @@ curl -X POST http://localhost:8000/api/v1/chat/fetch-url \
   -H "Authorization: Bearer <token>" \
   -d '{"url": "https://example.com/article"}'
 
-# Transcribe audio (voice-to-text via Whisper, auto-detect language)
+# Transcribe audio (Whisper or AWS Transcribe, auto-detect language)
 curl -X POST http://localhost:8000/api/v1/chat/transcribe \
   -H "Authorization: Bearer <token>" \
   -F "file=@recording.webm" \
   -F "language=auto"
 
-# Text-to-speech (returns audio/mpeg via Kokoro TTS)
+# Text-to-speech (Kokoro, AWS Polly, or Piper — returns audio/mpeg)
 curl -X POST http://localhost:8000/api/v1/chat/speak \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <token>" \
@@ -264,6 +277,16 @@ curl http://localhost:8000/api/v1/email/stats \
 
 # Get daily email summary
 curl http://localhost:8000/api/v1/email/summary \
+  -H "Authorization: Bearer <token>"
+
+# Connect an IMAP/SMTP account (WorkMail, Outlook, etc.)
+curl -X POST http://localhost:8000/api/v1/email/connect/imap \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"email": "user@company.com", "password": "...", "imap_host": "imap.mail.us-east-1.awsapps.com", "smtp_host": "smtp.mail.us-east-1.awsapps.com"}'
+
+# List contacts (auto-extracted from synced emails)
+curl http://localhost:8000/api/v1/email/contacts \
   -H "Authorization: Bearer <token>"
 
 # Disconnect Gmail
@@ -412,6 +435,7 @@ bob/
 │   │   └── email_tools.py    # Email tools for chat (send, search, summary)
 │   ├── email/
 │   │   ├── gmail.py           # Gmail OAuth2 client + API (fetch, send)
+│   │   ├── imap_client.py     # Generic IMAP/SMTP client (WorkMail, Outlook, etc.)
 │   │   └── sync_task.py       # Background email sync (every 10 min)
 │   ├── memory/
 │   │   └── conversation.py   # DB-backed session store
@@ -460,7 +484,10 @@ bob/
 | **ChromaDB** | Local vector store |
 | **Serper.dev** | Google Search API for web and product search |
 | **Whisper** | Speech-to-text with auto language detection |
+| **AWS Transcribe** | Cloud-based speech-to-text (alternative STT provider) |
 | **Kokoro TTS** | GPU-accelerated text-to-speech (26 voices, chunked playback) |
+| **AWS Polly** | Cloud-based TTS with generative voices |
+| **Piper TTS** | Local TTS for natural-sounding Romanian voice |
 | **Gmail API** | OAuth2 multi-tenant email integration (read, send, sync) |
 | **BeautifulSoup** | Web page content extraction |
 | **Amazon Bedrock** | Managed LLM inference (Claude, Titan) |

@@ -216,7 +216,9 @@ echo "Python dependencies installed"
 echo "--- .env ---"
 if [ ! -f .env ]; then
     cat > .env << 'DOTENVEOF'
-LLM_PROVIDER=${LLM_PROVIDER:-local}
+LLM_PROVIDER=${LLM_PROVIDER:-bedrock}
+BEDROCK_CHAT_MODEL_ID=${BEDROCK_CHAT_MODEL_ID:-us.anthropic.claude-haiku-4-5-20251001-v1:0}
+BEDROCK_EMBED_MODEL_ID=${BEDROCK_EMBED_MODEL_ID:-amazon.titan-embed-text-v2:0}
 LOCAL_MODEL_BASE_URL=${LOCAL_MODEL_BASE_URL:-}
 LOCAL_MODEL_NAME=${LOCAL_MODEL_NAME:-}
 LOCAL_MODEL_EMBED_NAME=${LOCAL_MODEL_EMBED_NAME:-}

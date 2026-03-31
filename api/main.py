@@ -57,16 +57,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables verified/created")
 
-    # Start background email sync task
-    from core.email.sync_task import start_email_sync_task
-
-    sync_task = start_email_sync_task()
-
     yield
-
-    # Cancel background task
-    if sync_task and not sync_task.done():
-        sync_task.cancel()
 
     await engine.dispose()
     logger.info("Shutting down bob")

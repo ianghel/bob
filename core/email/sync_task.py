@@ -1,107 +1,90 @@
-"""Background email sync — fetches unread emails for all active accounts every 10 minutes."""
+"""Per-user email sync — fetches emails on login and every 5 minutes."""
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timezone
+
+from sqlalchemy import delete, func, select
 
 from core.config import get_settings
 from core.database.engine import async_session
 from core.database.models import EmailAccount, EmailDigest
-from core.email.gmail import fetch_unread_emails, fetch_sent_emails
-from core.llm.base import Message
-from sqlalchemy import select
+from core.email.gmail import fetch_sent_emails, fetch_unread_emails
 
 logger = logging.getLogger(__name__)
 
-SYNC_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+SYNC_INTERVAL_SECONDS = 5 * 60  # 5 minutes
+MAX_EMAILS_PER_USER = 50
+AUTO_STOP_AFTER_SECONDS = 60 * 60  # stop loop after 1 hour of no login refresh
 
-TRIAGE_PROMPT = """You are an email assistant. Analyze this email and respond ONLY with JSON (no markdown, no backticks):
-
-From: {sender}
-Subject: {subject}
-Body: {body}
-
-JSON format:
-{{"urgency": "low|medium|high", "category": "invoice|meeting|question|newsletter|notification|personal|spam|other", "action": "one short sentence about what to do", "reply_draft": "1-2 sentence suggested reply, or null if no reply needed"}}"""
+# Track active per-user sync loops: {user_id: asyncio.Task}
+_active_loops: dict[str, asyncio.Task] = {}
 
 
-async def _sync_all_accounts():
-    """Sync emails for all active accounts."""
+async def sync_user_emails(user_id: str, tenant_id: str) -> int:
+    """Fetch emails for a single user's accounts. Returns count of new emails."""
     settings = get_settings()
-
     if not settings.google_client_id:
-        return
+        return 0
 
-    # Build LLM provider
-    from core.llm.local import LocalProvider
-
-    llm = LocalProvider(
-        base_url=settings.local_model_base_url,
-        model_name=settings.local_model_name,
-        api_key=settings.local_model_api_key,
-    )
+    new_total = 0
 
     async with async_session() as db:
         result = await db.execute(
-            select(EmailAccount).where(EmailAccount.is_active == True)
+            select(EmailAccount).where(
+                EmailAccount.user_id == user_id,
+                EmailAccount.is_active == True,
+            )
         )
         accounts = result.scalars().all()
 
         if not accounts:
-            return
+            return 0
 
         for account in accounts:
             try:
+                # --- Inbox (unread) ---
                 raw_emails = await fetch_unread_emails(
                     account=account,
                     client_id=settings.google_client_id,
                     client_secret=settings.google_client_secret,
-                    max_results=20,
+                    max_results=30,
                 )
-                await db.commit()  # save refreshed token
+                await db.commit()  # persist refreshed token
 
                 new_count = 0
                 for email_data in raw_emails:
                     existing = await db.execute(
-                        select(EmailDigest).where(
-                            EmailDigest.message_id == email_data["message_id"]
+                        select(EmailDigest.id).where(
+                            EmailDigest.user_id == user_id,
+                            EmailDigest.message_id == email_data["message_id"],
                         )
                     )
                     if existing.scalar_one_or_none():
                         continue
 
-                    triage = await _triage(llm, email_data)
-
-                    received = None
-                    if email_data.get("received_at"):
-                        try:
-                            received = datetime.fromisoformat(
-                                email_data["received_at"].replace("Z", "+00:00")
-                            )
-                        except ValueError:
-                            pass
-
+                    received = _parse_date(email_data.get("received_at"))
                     digest = EmailDigest(
-                        tenant_id=account.tenant_id,
-                        user_id=account.user_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        account_id=account.id,
                         message_id=email_data["message_id"],
                         source="gmail",
                         sender=email_data["sender"],
                         subject=email_data["subject"],
                         body_snippet=email_data.get("body", "")[:500],
                         attachments_json=email_data.get("attachments", []),
-                        urgency=triage.get("urgency", "medium"),
-                        category=triage.get("category", "other"),
-                        action=triage.get("action"),
-                        reply_draft=triage.get("reply_draft"),
+                        urgency="medium",
+                        category="other",
+                        action=None,
+                        reply_draft=None,
                         status="pending",
                         received_at=received,
                     )
                     db.add(digest)
                     new_count += 1
 
-                # --- Also sync SENT emails ---
+                # --- Sent emails ---
                 sent_emails = await fetch_sent_emails(
                     account=account,
                     client_id=settings.google_client_id,
@@ -112,26 +95,20 @@ async def _sync_all_accounts():
                 sent_count = 0
                 for email_data in sent_emails:
                     existing = await db.execute(
-                        select(EmailDigest).where(
-                            EmailDigest.message_id == email_data["message_id"]
+                        select(EmailDigest.id).where(
+                            EmailDigest.user_id == user_id,
+                            EmailDigest.message_id == email_data["message_id"],
                         )
                     )
                     if existing.scalar_one_or_none():
                         continue
 
-                    received = None
-                    if email_data.get("received_at"):
-                        try:
-                            received = datetime.fromisoformat(
-                                email_data["received_at"].replace("Z", "+00:00")
-                            )
-                        except ValueError:
-                            pass
-
+                    received = _parse_date(email_data.get("received_at"))
                     to_addr = email_data.get("to", "unknown")
                     digest = EmailDigest(
-                        tenant_id=account.tenant_id,
-                        user_id=account.user_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        account_id=account.id,
                         message_id=email_data["message_id"],
                         source="gmail",
                         sender=f"me → {to_addr}",
@@ -150,65 +127,97 @@ async def _sync_all_accounts():
 
                 account.last_sync_at = datetime.now(timezone.utc)
                 await db.commit()
+                new_total += new_count + sent_count
 
                 if new_count or sent_count:
                     logger.info(
-                        "Background sync: %d new inbox + %d sent for %s",
-                        new_count,
-                        sent_count,
-                        account.email_address,
+                        "Email sync: %d inbox + %d sent for %s",
+                        new_count, sent_count, account.email_address,
                     )
 
             except Exception as e:
-                logger.error(
-                    "Background sync failed for %s: %s",
-                    account.email_address,
-                    e,
-                )
+                logger.error("Email sync failed for %s: %s", account.email_address, e)
+
+        # --- Trim to MAX_EMAILS_PER_USER ---
+        await _trim_emails(db, user_id)
+
+    return new_total
 
 
-async def _triage(llm, email_data: dict) -> dict:
-    """LLM triage for a single email."""
-    body_for_llm = email_data.get("body", "")[:1500] or "(empty)"
-    prompt = TRIAGE_PROMPT.format(
-        sender=email_data.get("sender", "unknown"),
-        subject=email_data.get("subject", ""),
-        body=body_for_llm,
+async def _trim_emails(db, user_id: str):
+    """Keep only the newest MAX_EMAILS_PER_USER emails for a user."""
+    count_result = await db.execute(
+        select(func.count(EmailDigest.id)).where(EmailDigest.user_id == user_id)
     )
-    try:
-        response = await llm.chat(
-            messages=[Message(role="user", content=prompt)],
-            temperature=0.1,
-            max_tokens=300,
+    total = count_result.scalar()
+
+    if total <= MAX_EMAILS_PER_USER:
+        return
+
+    # Find the cutoff: get the id of the Nth newest email
+    cutoff_result = await db.execute(
+        select(EmailDigest.processed_at)
+        .where(EmailDigest.user_id == user_id)
+        .order_by(EmailDigest.processed_at.desc())
+        .offset(MAX_EMAILS_PER_USER)
+        .limit(1)
+    )
+    cutoff_date = cutoff_result.scalar()
+    if cutoff_date is None:
+        return
+
+    deleted = await db.execute(
+        delete(EmailDigest).where(
+            EmailDigest.user_id == user_id,
+            EmailDigest.processed_at <= cutoff_date,
         )
-        raw = response.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        return json.loads(raw)
+    )
+    await db.commit()
+    logger.info("Trimmed %d old emails for user %s", deleted.rowcount, user_id)
+
+
+def trigger_user_sync(user_id: str, tenant_id: str):
+    """Fire-and-forget: sync emails for a user and start a 5-min loop.
+
+    Safe to call multiple times — restarts the loop timer on each login.
+    """
+    # Cancel existing loop if any (will restart fresh)
+    existing = _active_loops.get(user_id)
+    if existing and not existing.done():
+        existing.cancel()
+
+    task = asyncio.create_task(_user_sync_loop(user_id, tenant_id))
+    _active_loops[user_id] = task
+
+
+async def _user_sync_loop(user_id: str, tenant_id: str):
+    """Sync immediately, then every 5 minutes. Auto-stops after 1 hour."""
+    try:
+        # Immediate first sync
+        logger.info("Email sync triggered for user %s", user_id)
+        await sync_user_emails(user_id, tenant_id)
+
+        # Periodic sync every 5 minutes
+        elapsed = 0
+        while elapsed < AUTO_STOP_AFTER_SECONDS:
+            await asyncio.sleep(SYNC_INTERVAL_SECONDS)
+            elapsed += SYNC_INTERVAL_SECONDS
+            logger.info("Periodic email sync for user %s", user_id)
+            await sync_user_emails(user_id, tenant_id)
+
+        logger.info("Email sync loop stopped for user %s (auto-stop after 1h)", user_id)
+    except asyncio.CancelledError:
+        logger.info("Email sync loop cancelled for user %s", user_id)
     except Exception as e:
-        logger.warning("Background triage failed: %s", e)
-        return {
-            "urgency": "medium",
-            "category": "other",
-            "action": "Review manually",
-            "reply_draft": None,
-        }
+        logger.error("Email sync loop error for user %s: %s", user_id, e)
+    finally:
+        _active_loops.pop(user_id, None)
 
 
-async def _sync_loop():
-    """Run sync every SYNC_INTERVAL_SECONDS."""
-    # Wait 30 seconds after startup before first sync
-    await asyncio.sleep(30)
-    while True:
-        try:
-            logger.info("Background email sync starting...")
-            await _sync_all_accounts()
-            logger.info("Background email sync complete")
-        except Exception as e:
-            logger.error("Background email sync error: %s", e)
-        await asyncio.sleep(SYNC_INTERVAL_SECONDS)
-
-
-def start_email_sync_task() -> asyncio.Task:
-    """Start the background sync loop as an asyncio task."""
-    return asyncio.create_task(_sync_loop())
+def _parse_date(date_str: str | None) -> datetime | None:
+    if not date_str:
+        return None
+    try:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except ValueError:
+        return None

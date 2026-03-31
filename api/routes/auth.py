@@ -18,7 +18,8 @@ from core.auth.service import (
     reset_password,
     verify_email,
 )
-from core.database.models import Tenant
+from core.database.models import Tenant, User
+from core.email.sync_task import trigger_user_sync
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,12 @@ async def login_user(
         )
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+
+    # Trigger async email sync (non-blocking)
+    user_result = await db.execute(select(User).where(User.email == request.email))
+    user = user_result.scalar_one_or_none()
+    if user:
+        trigger_user_sync(user.id, user.tenant_id)
 
     return LoginResponse(access_token=token, tenant_slug=tenant_slug)
 

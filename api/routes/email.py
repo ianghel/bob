@@ -1134,7 +1134,7 @@ async def list_contacts(
 
     stmt = (
         select(Contact)
-        .where(Contact.user_id == user.id)
+        .where(Contact.tenant_id == tenant.id, Contact.user_id == user.id)
         .order_by(Contact.name, Contact.email)
         .limit(limit)
     )

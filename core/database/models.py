@@ -163,13 +163,14 @@ class EmailDigest(Base):
     __tablename__ = "email_digests"
     __table_args__ = (
         Index("ix_email_digests_user_status", "user_id", "status"),
+        UniqueConstraint("tenant_id", "user_id", "message_id", name="uq_tenant_user_message"),
     )
 
     id = Column(String(36), primary_key=True, default=_uuid)
     tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     account_id = Column(String(36), ForeignKey("email_accounts.id", ondelete="SET NULL"), nullable=True, index=True)
-    message_id = Column(String(255), nullable=False, unique=True, index=True)
+    message_id = Column(String(255), nullable=False, index=True)
     source = Column(String(20), nullable=False, default="gmail")
     sender = Column(String(500), nullable=False)
     subject = Column(String(1000), nullable=True)

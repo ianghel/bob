@@ -364,7 +364,7 @@ def make_email_tool_executor(db: AsyncSession, user_id: str, tenant_id: str):
     async def list_contacts_tool(query: str = "", limit: int = 50) -> str:
         stmt = (
             select(Contact)
-            .where(Contact.user_id == user_id)
+            .where(Contact.tenant_id == tenant_id, Contact.user_id == user_id)
             .order_by(Contact.name, Contact.email)
             .limit(min(limit, 200))
         )

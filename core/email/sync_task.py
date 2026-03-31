@@ -154,26 +154,27 @@ async def _trim_emails(db, user_id: str):
     if total <= MAX_EMAILS_PER_USER:
         return
 
-    # Find the cutoff: get the id of the Nth newest email
-    cutoff_result = await db.execute(
-        select(EmailDigest.processed_at)
+    # Get IDs of the emails to keep (newest by received_at)
+    keep_ids_result = await db.execute(
+        select(EmailDigest.id)
         .where(EmailDigest.user_id == user_id)
-        .order_by(EmailDigest.processed_at.desc())
-        .offset(MAX_EMAILS_PER_USER)
-        .limit(1)
+        .order_by(EmailDigest.received_at.desc())
+        .limit(MAX_EMAILS_PER_USER)
     )
-    cutoff_date = cutoff_result.scalar()
-    if cutoff_date is None:
-        return
+    keep_ids = {row[0] for row in keep_ids_result.all()}
 
-    deleted = await db.execute(
-        delete(EmailDigest).where(
-            EmailDigest.user_id == user_id,
-            EmailDigest.processed_at <= cutoff_date,
-        )
+    # Delete everything else for this user
+    all_ids_result = await db.execute(
+        select(EmailDigest.id).where(EmailDigest.user_id == user_id)
     )
-    await db.commit()
-    logger.info("Trimmed %d old emails for user %s", deleted.rowcount, user_id)
+    delete_ids = [row[0] for row in all_ids_result.all() if row[0] not in keep_ids]
+
+    if delete_ids:
+        await db.execute(
+            delete(EmailDigest).where(EmailDigest.id.in_(delete_ids))
+        )
+        await db.commit()
+        logger.info("Trimmed %d old emails for user %s", len(delete_ids), user_id)
 
 
 def trigger_user_sync(user_id: str, tenant_id: str):

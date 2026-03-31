@@ -884,7 +884,7 @@ async def get_inbox(
             EmailDigest.tenant_id == tenant.id,
             EmailDigest.user_id == user.id,
         )
-        .order_by(EmailDigest.processed_at.desc())
+        .order_by(EmailDigest.received_at.desc())
         .limit(limit)
         .offset(offset)
     )

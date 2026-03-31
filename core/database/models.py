@@ -224,3 +224,21 @@ class Contact(Base):
 
     user = relationship("User")
     tenant = relationship("Tenant")
+
+
+class LlmUsageLog(Base):
+    """Append-only log of LLM calls for usage/cost tracking."""
+
+    __tablename__ = "llm_usage_log"
+    __table_args__ = (Index("ix_usage_period", "period"),)
+
+    id = Column(String(36), primary_key=True, default=_uuid)
+    period = Column(String(7), nullable=False)  # "YYYY-MM"
+    model = Column(String(100), nullable=False)
+    call_type = Column(String(20), nullable=False)  # chat | stream | chat_with_tools | embed
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Float, nullable=False, default=0.0)
+    tenant_id = Column(String(36), nullable=True)
+    user_id = Column(String(36), nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)

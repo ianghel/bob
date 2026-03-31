@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     # -- Rate Limiting --------------------------------------------------------
     rate_limit: str = "60/minute"
 
+    # -- Usage Limits ---------------------------------------------------------
+    usage_limit_enabled: bool = True
+    usage_limit_monthly_usd: float = 10.00
+    bedrock_price_input_per_mtok: float = 0.80
+    bedrock_price_output_per_mtok: float = 4.00
+    bedrock_price_embed_per_mtok: float = 0.02
+
     # -- Context Window / Memory Management -----------------------------------
     context_max_tokens: int = 48000
     context_sliding_window_turns: int = 10

@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 from api.dependencies import AgentDep, CurrentTenantDep, CurrentUserDep, DBSessionDep
 from core.agent.orchestrator import AgentRun, AgentRunStatus
+from core.config import get_settings
+from core.llm.usage import check_usage_limit
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,10 @@ async def run_agent(
     tenant: CurrentTenantDep,
 ) -> AgentRunResponse:
     """Execute an agent task, scoped to the current tenant."""
+    _settings = get_settings()
+    if _settings.llm_provider == "bedrock":
+        await check_usage_limit(db, _settings)
+
     try:
         run = await orchestrator.run(
             task=request.task,

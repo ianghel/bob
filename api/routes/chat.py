@@ -24,6 +24,7 @@ from core.chat.email_tools import EMAIL_TOOL_SCHEMAS, make_email_tool_executor
 from core.chat.web_tools import TOOL_SCHEMAS, execute_tool
 from core.config import get_settings
 from core.llm.base import Message, MessageRole
+from core.llm.usage import check_usage_limit, log_llm_usage
 from core.memory.context_manager import ContextManager
 from core.memory.conversation import ConversationMemory, conversation_to_text
 
@@ -224,6 +225,8 @@ async def chat(
                 use_tools=use_tools,
                 tool_schemas=active_tools,
                 tool_executor=combined_tool_executor,
+                tenant_id=tenant.id,
+                user_id=user.id,
             ),
             media_type="text/event-stream",
             headers={
@@ -233,6 +236,10 @@ async def chat(
         )
 
     # Non-streaming response — with optional tool calling
+
+    _usage_settings = get_settings()
+    if _usage_settings.llm_provider == "bedrock":
+        await check_usage_limit(db, _usage_settings)
 
     try:
         if use_tools:
@@ -249,11 +256,25 @@ async def chat(
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
             )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("LLM chat error for session %s: %s", session_id, e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"LLM provider error: {e}",
+        )
+
+    if _usage_settings.llm_provider == "bedrock" and response.input_tokens is not None:
+        await log_llm_usage(
+            db,
+            model=response.model,
+            call_type="chat_with_tools" if use_tools else "chat",
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            settings=_usage_settings,
+            tenant_id=tenant.id,
+            user_id=user.id,
         )
 
     tools_used_names = [t["name"] for t in response.tools_used] if response.tools_used else None
@@ -294,6 +315,8 @@ async def _stream_chat(
     use_tools: bool = False,
     tool_schemas: list[dict] | None = None,
     tool_executor=None,
+    tenant_id: str | None = None,
+    user_id: str | None = None,
 ):
     """Async generator producing SSE-formatted chunks.
 
@@ -302,6 +325,10 @@ async def _stream_chat(
     in small chunks to maintain the SSE contract.
     """
     tools_used_names: list[str] | None = None
+
+    _usage_settings = get_settings()
+    if _usage_settings.llm_provider == "bedrock":
+        await check_usage_limit(db, _usage_settings)
 
     try:
         if use_tools and hasattr(llm, 'chat_with_tools'):
@@ -319,6 +346,18 @@ async def _stream_chat(
             )
             complete_text = response.content
             tools_used_names = [t["name"] for t in response.tools_used] if response.tools_used else None
+
+            if _usage_settings.llm_provider == "bedrock" and response.input_tokens is not None:
+                await log_llm_usage(
+                    db,
+                    model=response.model,
+                    call_type="chat_with_tools",
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    settings=_usage_settings,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                )
 
             # Emit content in chunks to simulate streaming
             chunk_size = 20
@@ -455,8 +494,14 @@ async def chat_upload(
         Message(role=MessageRole.USER, content=user_msg),
     ]
 
+    _usage_settings = get_settings()
+    if _usage_settings.llm_provider == "bedrock":
+        await check_usage_limit(db, _usage_settings)
+
     try:
         response = await llm.chat(messages=messages, max_tokens=4096, temperature=0.5)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("LLM error during upload chat: %s", e)
         response_content = (
@@ -465,6 +510,17 @@ async def chat_upload(
         )
     else:
         response_content = response.content
+        if _usage_settings.llm_provider == "bedrock" and response.input_tokens is not None:
+            await log_llm_usage(
+                db,
+                model=response.model,
+                call_type="chat",
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
+                settings=_usage_settings,
+                tenant_id=tenant.id,
+                user_id=user.id,
+            )
 
     await _memory.save_turn(
         db=db, session_id=session.id,

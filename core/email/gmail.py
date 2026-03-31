@@ -142,15 +142,15 @@ async def fetch_unread_emails(
     client_secret: str,
     max_results: int = 10,
 ) -> list[dict]:
-    """Fetch unread emails from Gmail API."""
+    """Fetch recent inbox emails from Gmail API."""
     token = await _ensure_valid_token(account, client_id, client_secret)
 
     async with httpx.AsyncClient(timeout=20) as client:
-        # List unread messages
+        # List recent inbox messages (not just unread)
         res = await client.get(
             f"{GMAIL_API_BASE}/users/me/messages",
             headers={"Authorization": f"Bearer {token}"},
-            params={"q": "is:unread", "maxResults": max_results},
+            params={"q": "in:inbox", "maxResults": max_results},
         )
         res.raise_for_status()
         messages = res.json().get("messages", [])

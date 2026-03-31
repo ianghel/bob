@@ -20,9 +20,10 @@ An AI agent platform with multi-tenant authentication, conversational memory, RA
   - **Email indexing in ChromaDB** — email content is semantically searchable via RAG
   - **Contact list** — auto-extracted from synced emails
 - **Email in Chat** — ask Bob "ce emailuri am primit azi?", "trimite un email lui X", or "rezumat emailuri" and he uses tool calls (`send_email`, `search_emails`, `get_email_summary`) to interact with your email
-- **Background Email Sync** — automatic sync every 10 minutes fetches the latest 20 inbox + 20 sent emails per connected account
+- **Background Email Sync** — per-user async sync triggered on login, then every 5 minutes; keeps the 50 most recent emails per user
 - **RAG** pipeline with ChromaDB vector store for document-grounded answers
 - **Agentic tool use** via Strands Agents (calculator, time, RAG lookup, summarize, email tools)
+- **Usage Limits** — configurable monthly spending cap ($10/month default) for Bedrock LLM calls; tracks token usage per call, resets automatically each calendar month
 - **Multi-tenant auth** with JWT login, user registration, email verification, and API tokens
 - **Provider abstraction**: Amazon Bedrock or any OpenAI-compatible server (LM Studio, Ollama, vLLM)
 - **React frontend** (Vite + TypeScript + Tailwind)
@@ -139,6 +140,8 @@ Key settings in `.env`:
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL (e.g. `https://your-domain/api/v1/email/callback/gmail`) |
 | `BASE_URL` | Public app URL (e.g. `https://your-domain`) |
 | `MAIL_*` | SMTP settings for user approval emails |
+| `USAGE_LIMIT_ENABLED` | Enable monthly spending cap (default: `true`) |
+| `USAGE_LIMIT_MONTHLY_USD` | Monthly limit in USD (default: `10.00`) |
 
 ### 6. Start a model server
 
@@ -429,14 +432,15 @@ bob/
 │   ├── llm/
 │   │   ├── base.py           # Abstract BaseLLMProvider
 │   │   ├── bedrock.py        # Amazon Bedrock provider (boto3)
-│   │   └── local.py          # OpenAI-compatible provider
+│   │   ├── local.py          # OpenAI-compatible provider
+│   │   └── usage.py          # LLM usage tracking & spending limits
 │   ├── chat/
 │   │   ├── web_tools.py      # Web search, product search, URL fetch tools
 │   │   └── email_tools.py    # Email tools for chat (send, search, summary)
 │   ├── email/
 │   │   ├── gmail.py           # Gmail OAuth2 client + API (fetch, send)
 │   │   ├── imap_client.py     # Generic IMAP/SMTP client (WorkMail, Outlook, etc.)
-│   │   └── sync_task.py       # Background email sync (every 10 min)
+│   │   └── sync_task.py       # Per-user email sync (on login + every 5 min)
 │   ├── memory/
 │   │   └── conversation.py   # DB-backed session store
 │   ├── rag/
